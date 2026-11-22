@@ -2185,10 +2185,31 @@ function InfiniteCanvasPage() {
         setDialogNodeId(childId);
     }, []);
 
-    /** RelayVSR 视频 2x 放大：深拷贝源视频到新节点，不改动原节点 */
+    /** RelayVSR 视频 2x 放大：点击立即建占位卡片(右侧)，完成后填入真实放大视频，不改动原节点 */
     const upscaleVideoNode = useCallback(async (node: CanvasNodeData) => {
         if (!node.metadata?.content) return;
-        const hide = message.loading(t("canvas.nodeToolbar.videoUpscaling"), 0);
+        const childId = nanoid();
+        const estSize = fitNodeSize(node.width * 2, node.height * 2, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+        // 立即创建「处理中」占位卡片，让用户马上看到生成中的节点
+        const child: CanvasNodeData = {
+            id: childId,
+            type: CanvasNodeType.Video,
+            title: `${node.title || t("assets.kinds.video")} · 2x`,
+            position: { x: node.position.x + node.width + 96, y: node.position.y },
+            width: estSize.width,
+            height: estSize.height,
+            metadata: {
+                prompt: node.metadata?.prompt,
+                status: NODE_STATUS_LOADING,
+                model: "video-relayvsr-x2",
+                videoMode: "upscale",
+            },
+        };
+        setNodes((prev) => [...prev, child]);
+        setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
+        setSelectedNodeIds(new Set([childId]));
+        setDialogNodeId(childId);
+        setRunningNodeId(childId);
         try {
             let blob: Blob | null = null;
             if (node.metadata.storageKey) {
@@ -2203,25 +2224,22 @@ function InfiniteCanvasPage() {
             const result = await upscaleVideo2x(effectiveConfig, blob, `${node.title || "source"}.mp4`);
             const uploaded = await storeGeneratedVideo(result);
             const size = fitNodeSize(uploaded.width || node.width * 2, uploaded.height || node.height * 2, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-            const childId = nanoid();
-            const child: CanvasNodeData = {
-                id: childId,
-                type: CanvasNodeType.Video,
-                title: `${node.title || t("assets.kinds.video")} · 2x`,
-                position: { x: node.position.x + node.width + 96, y: node.position.y },
+            setNodes((prev) => prev.map((item) => (item.id === childId ? {
+                ...item,
                 width: size.width,
                 height: size.height,
-                metadata: { ...videoMetadata(uploaded), prompt: node.metadata?.prompt },
-            };
-            setNodes((prev) => [...prev, child]);
-            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
-            setSelectedNodeIds(new Set([childId]));
-            setDialogNodeId(childId);
-            hide();
+                metadata: { ...videoMetadata(uploaded), prompt: node.metadata?.prompt, status: NODE_STATUS_SUCCESS },
+            } : item)));
             message.success(t("canvas.nodeToolbar.videoUpscaleDone"));
         } catch (e) {
-            hide();
-            message.error(`${t("canvas.nodeToolbar.videoUpscaleFailed")}: ${e instanceof Error ? e.message : String(e)}`);
+            const errorDetails = e instanceof Error ? e.message : String(e);
+            setNodes((prev) => prev.map((item) => (item.id === childId ? {
+                ...item,
+                metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails },
+            } : item)));
+            message.error(`${t("canvas.nodeToolbar.videoUpscaleFailed")}: ${errorDetails}`);
+        } finally {
+            setRunningNodeId((current) => (current === childId ? null : current));
         }
     }, [effectiveConfig, message, t]);
 
