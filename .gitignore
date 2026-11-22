@@ -1,0 +1,31 @@
+# ---- 本地运行时 / 构建产物（不上传）----
+# 便携版 Node 运行时（约 107MB）
+node/
+node_modules/
+**/node_modules/
+# 前端构建产物（clone 后自行 npm run build）
+web/dist/
+**/dist
+.next/
+out/
+
+# ---- 生成的视频 / 备份 / 临时文件 ----
+# H3 生成的测试 MP4
+gateway/video-outputs/
+*.mp4
+# VERSION.bak / CHANGELOG.md.bak 等备份
+*.bak
+
+# ---- 环境 / 日志 / 缓存 ----
+.env*
+!.env.example
+data/
+*.log
+*.tsbuildinfo
+.DS_Store
+.idea
+
+# ---- 插件产物 ----
+web/public/plugins
+plugins/canvas/*/dist
+plugins/canvas/*/node_modules
