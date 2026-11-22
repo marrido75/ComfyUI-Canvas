@@ -623,10 +623,13 @@ async function runVideoWorkflow(wf, taskId) {
   if (!outputs) throw new Error("等待视频结果超时（20 分钟）");
 
   // 找 SaveVideo / VHS_VideoCombine 的输出（gifs 或 videos 字段）
+  // 关键：只取 type=output 的结果。LoadVideo 等输入节点也会暴露 images，
+  // 但 type=input，若误取会把原始输入视频当成结果（放大后分辨率不变就是这个问题）。
   for (const nodeOut of Object.values(outputs)) {
     const media = nodeOut.gifs || nodeOut.videos || nodeOut.images || [];
     for (const item of media) {
       if (!item.filename) continue;
+      if (item.type && item.type !== "output") continue; // 跳过 input/temp 等非最终输出
       const ext = path.extname(item.filename) || ".mp4";
       const q = new URLSearchParams({
         filename: item.filename,
