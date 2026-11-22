@@ -106,6 +106,65 @@ function parseSize(size) {
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/* ----------------------------- 实时进度追踪（ComfyUI WebSocket） ----------------------------- */
+// ComfyUI 的 progress 消息只推送给「提交任务时用的同一个 clientId」的连接。
+// runWorkflow 统一用 GATEWAY_CLIENT_ID 提交，这里用同一 clientId 建一条长连接收全部任务的进度。
+const GATEWAY_CLIENT_ID = "local-canvas-gateway";
+const progressTasks = new Map(); // prompt_id -> { step, total, percentage, status, startedAt, updatedAt }
+let latestProgressId = null; // 最近提交的任务，供画布轮询（本地单用户场景）
+
+function connectProgressSocket() {
+  try {
+    const wsUrl = COMFY.replace(/^http/, "ws") + `/ws?clientId=${GATEWAY_CLIENT_ID}`;
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      const d = msg.data;
+      if (!d || !d.prompt_id) return;
+      if (msg.type === "execution_start") {
+        const t = progressTasks.get(d.prompt_id) || {};
+        t.status = "running"; t.step = 0; t.total = 0; t.percentage = 0;
+        t.startedAt = t.startedAt || Date.now(); t.updatedAt = Date.now();
+        progressTasks.set(d.prompt_id, t);
+      } else if (msg.type === "progress" && typeof d.value === "number" && typeof d.max === "number" && d.max > 0) {
+        const t = progressTasks.get(d.prompt_id) || {};
+        t.status = "running"; t.step = d.value; t.total = d.max;
+        t.percentage = Math.max(0, Math.min(100, Math.round((d.value / d.max) * 100)));
+        t.startedAt = t.startedAt || Date.now(); t.updatedAt = Date.now();
+        progressTasks.set(d.prompt_id, t);
+      } else if (msg.type === "executing" && d.node === null) {
+        // 节点为 null 表示整个任务执行完毕
+        const t = progressTasks.get(d.prompt_id);
+        if (t) { t.status = "done"; t.updatedAt = Date.now(); }
+      }
+    };
+    ws.onclose = () => { setTimeout(connectProgressSocket, 2000); }; // 断线重连
+    ws.onerror = () => { try { ws.close(); } catch {} };
+  } catch (e) {
+    setTimeout(connectProgressSocket, 2000);
+  }
+}
+connectProgressSocket();
+
+/** 供画布轮询：返回当前（最近提交的）生成任务进度 */
+function handleProgress(res) {
+  const id = latestProgressId;
+  const t = id ? progressTasks.get(id) : null;
+  if (!t) {
+    return json(res, 200, { status: "idle", step: 0, total: 0, percentage: 0, elapsed: 0, promptId: null });
+  }
+  const elapsed = Math.round(((t.updatedAt || t.startedAt) - (t.startedAt || Date.now())) / 100) / 10;
+  json(res, 200, {
+    status: t.status || "running",
+    step: t.step || 0,
+    total: t.total || 0,
+    percentage: t.percentage || 0,
+    elapsed, // 秒
+    promptId: id,
+  });
+}
+
 /** 从 PNG/JPEG/WebP 的 base64 中读取像素尺寸（零依赖，解析文件头） */
 function imageSizeFromBase64(base64) {
   try {
@@ -169,7 +228,7 @@ async function uploadReference(base64Data, filename = "reference.png") {
 
 /** 提交工作流到 ComfyUI，轮询取图，返回 base64 数组 */
 async function runWorkflow(wf) {
-  const body = JSON.stringify({ prompt: wf, client_id: "local-canvas-gateway" });
+  const body = JSON.stringify({ prompt: wf, client_id: GATEWAY_CLIENT_ID });
   const pr = await comfyFetch("/prompt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -180,6 +239,9 @@ async function runWorkflow(wf) {
   const promptId = result.prompt_id;
   if (!promptId) throw new Error("ComfyUI 未返回 prompt_id: " + JSON.stringify(result).slice(0, 500));
   console.log(`  [${promptId}] 任务已提交`);
+  // 注册进度追踪
+  progressTasks.set(promptId, { status: "queued", step: 0, total: 0, percentage: 0, startedAt: Date.now(), updatedAt: Date.now() });
+  latestProgressId = promptId;
 
   // 轮询 history，等结果
   const deadline = Date.now() + 600000;
@@ -193,6 +255,7 @@ async function runWorkflow(wf) {
     if (!entry) continue;
     if (entry.status?.status_str === "error" || entry.status?.completed === false && entry.status?.messages?.some((m) => m[0] === "execution_error")) {
       const msg = JSON.stringify(entry.status?.messages || entry.status || {}).slice(0, 600);
+      const t = progressTasks.get(promptId); if (t) { t.status = "error"; t.updatedAt = Date.now(); }
       throw new Error("ComfyUI 执行出错: " + msg);
     }
     if (entry.outputs) {
@@ -200,7 +263,10 @@ async function runWorkflow(wf) {
       break;
     }
   }
-  if (!outputs) throw new Error("等待 ComfyUI 结果超时（10 分钟）");
+  if (!outputs) {
+    const t = progressTasks.get(promptId); if (t) { t.status = "error"; t.updatedAt = Date.now(); }
+    throw new Error("等待 ComfyUI 结果超时（10 分钟）");
+  }
 
   // 收集所有 SaveImage 输出的图片
   const images = [];
@@ -216,7 +282,11 @@ async function runWorkflow(wf) {
       images.push(buf.toString("base64"));
     }
   }
-  if (!images.length) throw new Error("ComfyUI 未产出图片");
+  if (!images.length) {
+    const t = progressTasks.get(promptId); if (t) { t.status = "error"; t.updatedAt = Date.now(); }
+    throw new Error("ComfyUI 未产出图片");
+  }
+  const doneTask = progressTasks.get(promptId); if (doneTask) { doneTask.status = "done"; doneTask.percentage = 100; doneTask.updatedAt = Date.now(); }
   console.log(`  [${promptId}] 完成，${images.length} 张图`);
   return images;
 }
@@ -714,6 +784,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") { cors(res); res.writeHead(204); res.end(); return; }
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   try {
+    // 当前生成任务实时进度（画布轮询显示进度条 / 计时）
+    if (req.method === "GET" && url.pathname === "/v1/images/progress") {
+      return handleProgress(res);
+    }
     if (req.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
       return json(res, 200, {
         object: "list",

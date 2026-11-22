@@ -460,7 +460,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot && props.node.type === CanvasNodeType.Image) return <ImageNodeContent {...props} />;
     if (props.node.type === CanvasNodeType.Text && props.node.metadata?.texts?.length && (props.node.metadata.status !== "error" || props.node.metadata.texts.some((text) => text.content))) return <TextContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} node={props.node} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
@@ -499,12 +499,28 @@ function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererP
     );
 }
 
-function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
+function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme" | "node">) {
     const { t } = useTranslation();
+    const progress = node.metadata?.genProgress;
+    const hasProgress = Boolean(progress && progress.total > 0);
+    const percentage = progress?.percentage ?? 0;
+    const elapsed = progress?.elapsed ?? 0;
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-4" style={{ color: theme.node.activeStroke }}>
             <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
             <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span>
+            {hasProgress ? (
+                <div className="flex w-full max-w-[220px] flex-col items-center gap-1.5">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ backgroundColor: theme.node.stroke }}>
+                        <div className="h-full rounded-full transition-[width] duration-300" style={{ width: `${percentage}%`, backgroundColor: theme.node.activeStroke }} />
+                    </div>
+                    <span className="text-[10px]" style={{ color: theme.node.muted }}>
+                        {progress!.step}/{progress!.total} 步 · {percentage}% · 已用 {elapsed.toFixed(1)}s
+                    </span>
+                </div>
+            ) : (
+                elapsed > 0 ? <span className="text-[10px]" style={{ color: theme.node.muted }}>已用 {elapsed.toFixed(1)}s</span> : null
+            )}
         </div>
     );
 }
@@ -802,6 +818,11 @@ function ImageContent({
                 )}
             </div>
             {primaryImage?.status === "error" ? <BatchImageFailureActions placement="left" onRetry={() => onRetryBatchImage?.(primaryImage.id)} onDelete={() => onDeleteBatchImage?.(primaryImage.id)} /> : null}
+            {!isBatchRoot && node.metadata?.durationMs ? (
+                <span className="pointer-events-none absolute bottom-2.5 right-2.5 z-20 rounded-md px-1.5 py-0.5 text-[10px] font-medium opacity-70 shadow-sm backdrop-blur-sm" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title="本次生成耗时">
+                    {node.metadata.durationMs < 60000 ? `${(node.metadata.durationMs / 1000).toFixed(1)}s` : `${Math.floor(node.metadata.durationMs / 60000)}分${Math.round((node.metadata.durationMs % 60000) / 1000)}秒`}
+                </span>
+            ) : null}
             {primaryImage?.content ? (
                 <button type="button" className="pointer-events-none absolute left-2.5 top-2.5 z-30 flex h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium opacity-0 shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02] group-hover/node:pointer-events-auto group-hover/node:opacity-100" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownloadBatchImage?.(primaryImage.id))}>
                     <Download className="size-3" />

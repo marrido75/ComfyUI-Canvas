@@ -5,7 +5,7 @@ import { Group, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
-import { requestEdit, requestGeneration, requestImageQuestion, requestOutpaint } from "@/services/api/image";
+import { fetchGenerationProgress, requestEdit, requestGeneration, requestImageQuestion, requestOutpaint } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -120,6 +120,8 @@ type CanvasGenerationRequest = {
     originNodeId: string;
     runningNodeId: string;
     controller: AbortController;
+    startTime?: number;
+    progressTimer?: ReturnType<typeof setInterval>;
 };
 
 const VIDEO_NODE_MAX_WIDTH = 420;
@@ -308,14 +310,37 @@ function InfiniteCanvasPage() {
 
     const startGenerationRequest = useCallback((targetNodeId: string, originNodeId: string, runningId = originNodeId, controller = new AbortController()) => {
         const previous = generationRequestsRef.current.get(targetNodeId);
+        if (previous?.progressTimer) clearInterval(previous.progressTimer);
         if (previous?.controller !== controller) previous?.controller.abort();
-        generationRequestsRef.current.set(targetNodeId, { targetNodeId, originNodeId, runningNodeId: runningId, controller });
+        const startTime = Date.now();
+        const request: CanvasGenerationRequest = { targetNodeId, originNodeId, runningNodeId: runningId, controller, startTime };
+        generationRequestsRef.current.set(targetNodeId, request);
+        // 轮询网关实时进度（本地单用户场景，网关返回最近提交的任务）
+        request.progressTimer = setInterval(async () => {
+            if (controller.signal.aborted) return;
+            try {
+                const p = await fetchGenerationProgress(effectiveConfig, { signal: controller.signal });
+                if (p.status === "idle") return;
+                setNodes((prev) => prev.map((item) => (item.id === targetNodeId
+                    ? { ...item, metadata: { ...item.metadata, genProgress: { percentage: p.percentage, step: p.step, total: p.total, elapsed: p.elapsed } } }
+                    : item)));
+            } catch { /* 轮询失败不影响生成 */ }
+        }, 400);
         return controller;
-    }, []);
+    }, [effectiveConfig]);
 
     const finishGenerationRequest = useCallback((targetNodeId: string, controller: AbortController) => {
         const request = generationRequestsRef.current.get(targetNodeId);
-        if (request?.controller === controller) generationRequestsRef.current.delete(targetNodeId);
+        if (request?.controller !== controller) return;
+        if (request.progressTimer) clearInterval(request.progressTimer);
+        const elapsedMs = request.startTime ? Date.now() - request.startTime : undefined;
+        generationRequestsRef.current.delete(targetNodeId);
+        // 写入本次生成耗时，供节点角标显示
+        if (elapsedMs != null) {
+            setNodes((prev) => prev.map((item) => (item.id === targetNodeId
+                ? { ...item, metadata: { ...item.metadata, durationMs: elapsedMs } }
+                : item)));
+        }
     }, []);
 
     const completeVideoNodeTask = useCallback(
@@ -401,6 +426,7 @@ function InfiniteCanvasPage() {
         generationRequestsRef.current.forEach((request) => {
             if (request.runningNodeId !== runningId) return;
             request.controller.abort();
+            if (request.progressTimer) clearInterval(request.progressTimer);
             generationRequestsRef.current.delete(request.targetNodeId);
             affectedNodeIds.add(request.targetNodeId);
             affectedNodeIds.add(request.originNodeId);

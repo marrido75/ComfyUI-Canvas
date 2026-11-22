@@ -818,6 +818,26 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 }
 
+export type GenerationProgress = {
+    status: "idle" | "queued" | "running" | "done" | "error";
+    step: number;
+    total: number;
+    percentage: number;
+    elapsed: number; // 秒
+    promptId: string | null;
+};
+
+/** 查询当前生成任务的实时采样进度（本地网关） */
+export async function fetchGenerationProgress(config: AiConfig, options?: RequestOptions): Promise<GenerationProgress> {
+    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const response = await axios.get<GenerationProgress>(aiApiUrl(requestConfig, "/images/progress"), {
+        headers: aiHeaders(requestConfig),
+        signal: options?.signal,
+        timeout: 8000,
+    });
+    return response.data;
+}
+
 /** 扩图：向本地网关 /images/outpaint 提交源图 + 左右上下扩展像素 */
 export async function requestOutpaint(
     config: AiConfig,
