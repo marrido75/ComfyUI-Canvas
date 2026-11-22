@@ -118,6 +118,7 @@
       "description": "两段式优化管线：MOSS 25 步出构图（TE-Speed 加速约 4x）→ Krea2 Kroma 风格 8 步二采 + 1.2x 放大提质感。采用 Comfy-Org 官方模型替代第三方合并版。",
       "status": "available",
       "icon": "Sparkles",
+      "workflowFile": "moss-krea2-refine-api.json",
       "models": [
         {
           "role": "Krea2 扩散模型（二采）",
@@ -149,6 +150,7 @@
       "description": "毫秒级视频超分，把 H3 生成的 864×480 视频放大到 1728×960，1 步采样、时序一致性好。",
       "status": "available",
       "icon": "Video",
+      "workflowFile": "relayvsr-x2-upscale-api.json",
       "models": [
         {
           "role": "扩散模型 · RelayVSR x2",
