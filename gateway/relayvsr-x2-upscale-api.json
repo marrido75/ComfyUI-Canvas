@@ -1,0 +1,151 @@
+{
+  "1": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "INPUT_VIDEO.mp4"
+    },
+    "_meta": {
+      "title": "输入视频（网关注入）"
+    }
+  },
+  "2": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "1",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "拆解视频"
+    }
+  },
+  "4": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "RelayVSR x2 扩散模型"
+    }
+  },
+  "5": {
+    "class_type": "RelayVSRConditioning",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VSR 条件"
+    }
+  },
+  "8": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "5",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "负向置零"
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "seed": 0,
+      "steps": 1,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "8",
+        0
+      ],
+      "latent_image": [
+        "5",
+        1
+      ],
+      "denoise": 1
+    },
+    "_meta": {
+      "title": "1 步采样"
+    }
+  },
+  "7": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "relayvsr_flash_vae_x2_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "RelayVSR Flash x2 VAE"
+    }
+  },
+  "104": {
+    "class_type": "VSRDecode",
+    "inputs": {
+      "vae": [
+        "7",
+        0
+      ],
+      "samples": [
+        "6",
+        0
+      ],
+      "images": [
+        "2",
+        0
+      ],
+      "detail": 1.0
+    },
+    "_meta": {
+      "title": "VSR 解码恢复全部帧"
+    }
+  },
+  "105": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "104",
+        0
+      ],
+      "fps": [
+        "2",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "合成视频（保留帧率）"
+    }
+  },
+  "106": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "105",
+        0
+      ],
+      "filename_prefix": "video/RelayVSR",
+      "format": "auto"
+    },
+    "_meta": {
+      "title": "保存"
+    }
+  }
+}

@@ -112,6 +112,61 @@
       ]
     },
     {
+      "id": "moss-krea2-refine",
+      "name": "MOSS + Krea2 二采细化（优化版）",
+      "nameEn": "MOSS + Krea2 Two-Stage Refine",
+      "description": "两段式优化管线：MOSS 25 步出构图（TE-Speed 加速约 4x）→ Krea2 Kroma 风格 8 步二采 + 1.2x 放大提质感。采用 Comfy-Org 官方模型替代第三方合并版。",
+      "status": "available",
+      "icon": "Sparkles",
+      "models": [
+        {
+          "role": "Krea2 扩散模型（二采）",
+          "file": "diffusion_models/krea2_turbo_int8_convrot.safetensors",
+          "sizeBytes": 13492686496,
+          "repo": "Comfy-Org/Krea-2",
+          "remotePath": "diffusion_models/krea2_turbo_int8_convrot.safetensors"
+        },
+        {
+          "role": "文本编码器 · Qwen3VL 4B fp8",
+          "file": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "sizeBytes": 5242467968,
+          "repo": "Comfy-Org/Krea-2",
+          "remotePath": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
+        },
+        {
+          "role": "VAE · Qwen Image",
+          "file": "vae/qwen_image_vae.safetensors",
+          "sizeBytes": 253806246,
+          "repo": "Comfy-Org/Krea-2",
+          "remotePath": "vae/qwen_image_vae.safetensors"
+        }
+      ]
+    },
+    {
+      "id": "relayvsr-x2-upscale",
+      "name": "RelayVSR 视频 2x 放大",
+      "nameEn": "RelayVSR Video 2x Upscale",
+      "description": "毫秒级视频超分，把 H3 生成的 864×480 视频放大到 1728×960，1 步采样、时序一致性好。",
+      "status": "available",
+      "icon": "Video",
+      "models": [
+        {
+          "role": "扩散模型 · RelayVSR x2",
+          "file": "diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors",
+          "sizeBytes": 5163295248,
+          "repo": "Comfy-Org/RelayVSR",
+          "remotePath": "diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors"
+        },
+        {
+          "role": "VAE · RelayVSR Flash x2",
+          "file": "vae/relayvsr_flash_vae_x2_fp32.safetensors",
+          "sizeBytes": 127759464,
+          "repo": "Comfy-Org/RelayVSR",
+          "remotePath": "vae/relayvsr_flash_vae_x2_fp32.safetensors"
+        }
+      ]
+    },
+    {
       "id": "moss-image",
       "name": "MOSS-Image 文生图",
       "nameEn": "MOSS-Image Text to Image",

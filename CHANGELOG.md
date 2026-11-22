@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v0.27.0 - 2026-11-22
+
++ [优化] MOSS 文生图接入 TE-Speed 预测跳步加速 + SkipLayerGuidance 提细节，实测 768×768 出图从约 52s 降到约 12s（约 4x），已端到端验证。
++ [新增] 图片模型「MOSS + Krea2 二采细化（优化版）」：两段式管线（MOSS 25 步构图 → TE-Speed 加速 → Krea2 8 步 beta 二采 + 1.2x 放大），采用 Comfy-Org 官方模型替代第三方合并版（krea2_turbo_int8 + qwen3vl_4b_fp8 + qwen_image_vae）。
++ [新增] RelayVSR 视频 2x 放大：视频节点悬浮工具栏新增「2x 放大」按钮，走新接口 `POST /v1/videos/upscale`，毫秒级超分，864×480 → 1728×960，保留帧率/音轨，已端到端验证。
++ [新增] 工作流注册表新增「MOSS+Krea2 二采」与「RelayVSR 视频 2x 放大」两项，可在「工作流」面板下载模型安装。
++ [修复] API 工作流顶层不能含 `_note` 等非节点键，否则 ComfyUI `/prompt` 返回 500；已移除。
+
 ## v0.26.1 - 2026-11-22
 
 + [修复] 未下载好的模型（Z-Image / Krea 2）不应出现在图片模型下拉里。下拉改为由网关 `/v1/models` 的 ready 状态动态驱动：只有模型下载齐全的额外模型才显示。

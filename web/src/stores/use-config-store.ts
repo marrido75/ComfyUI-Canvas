@@ -172,7 +172,7 @@ export function guessCapability(name: string): ModelCapability {
 
 // 本地 ComfyUI 极简网关的基础模型：在合并历史配置时自动补齐，
 // 避免用户只配了文生图、视频下拉为空（提示"请先在渠道里为视频指定模型"）。
-// 额外文生图模型（MOSS/Z-Image/Krea2）不在这里静态补齐——它们的可见性由网关
+// 额外文生图模型（MOSS/Z-Image/Krea2/MOSS+Krea2二采）不在这里静态补齐——它们的可见性由网关
 // /v1/models 的 ready 状态动态决定（只有模型下载齐全才出现在下拉里）。
 const LOCAL_GATEWAY_BASE_MARKERS = ["127.0.0.1:8190", "localhost:8190"];
 const LOCAL_GATEWAY_BASE_MODELS: ChannelModel[] = [
@@ -180,7 +180,7 @@ const LOCAL_GATEWAY_BASE_MODELS: ChannelModel[] = [
     { name: "video-minimax-h3", capability: "video" },
 ];
 // 由网关动态追加的额外图片模型 -> capability
-const DYNAMIC_IMAGE_MODEL_IDS = ["image-moss", "image-zimage", "image-krea2"];
+const DYNAMIC_IMAGE_MODEL_IDS = ["image-moss", "image-zimage", "image-krea2", "image-moss-krea2"];
 
 function ensureLocalGatewayModels(channels: ModelChannel[]): ModelChannel[] {
     return channels.map((channel) => {

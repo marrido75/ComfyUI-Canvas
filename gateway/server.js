@@ -33,6 +33,7 @@ const EDIT_WORKFLOW = path.join(__dirname, "qwen-edit.json");
 const INPAINT_WORKFLOW = path.join(__dirname, "qwen-inpaint.json");
 const OUTPAINT_WORKFLOW = path.join(__dirname, "qwen-outpaint.json");
 const VIDEO_WORKFLOW = path.join(__dirname, "h3-t2v.json");
+const UPSCALE_WORKFLOW = path.join(__dirname, "relayvsr-x2-upscale-api.json");
 // 额外的文生图模型：model id -> { 显示名, API 工作流, 注册表工作流 id }
 // API 工作流是从 ComfyUI 官方 UI/subgraph 模板重构成的扁平 API 格式，网关可直接提交。
 const EXTRA_IMAGE_MODELS = {
@@ -53,6 +54,12 @@ const EXTRA_IMAGE_MODELS = {
     displayEn: "Krea 2 Text to Image",
     workflow: path.join(__dirname, "krea2-t2i-api.json"),
     registryId: "krea2",
+  },
+  "image-moss-krea2": {
+    display: "MOSS + Krea2 二采细化（优化版）",
+    displayEn: "MOSS + Krea2 Two-Stage Refine",
+    workflow: path.join(__dirname, "moss-krea2-refine-api.json"),
+    registryId: "moss-krea2-refine",
   },
 };
 const VIDEO_OUT_DIR = path.join(__dirname, "video-outputs");
@@ -253,6 +260,26 @@ async function uploadReference(base64Data, filename = "reference.png") {
   return info.name || filename;
 }
 
+/** 把视频文件（Buffer）上传到 ComfyUI input 目录，返回可用于 LoadVideo 的文件名 */
+async function uploadVideoFile(buf, filename = "upscale_input.mp4") {
+  const boundary = "----GatewayBoundary" + Date.now();
+  const head = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${filename}"\r\nContent-Type: video/mp4\r\n\r\n`
+  );
+  const tail = Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\ninput\r\n--${boundary}--\r\n`);
+  const body = Buffer.concat([head, buf, tail]);
+  const r = await fetch(`${COMFY}/upload/image`, {
+    method: "POST",
+    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    body,
+    signal: AbortSignal.timeout(180000),
+  });
+  if (!r.ok) throw new Error("上传视频失败: " + (await r.text().catch(() => "")).slice(0, 300));
+  const info = await r.json();
+  console.log("  视频已上传:", info.name || filename);
+  return info.name || filename;
+}
+
 /** 提交工作流到 ComfyUI，轮询取图，返回 base64 数组 */
 async function runWorkflow(wf) {
   const body = JSON.stringify({ prompt: wf, client_id: GATEWAY_CLIENT_ID });
@@ -391,6 +418,8 @@ async function handleGeneration(req, res, isEdit) {
         const wf = loadWorkflow(extraModel.workflow);
         // 这些工作流统一用 id "4" 的 CLIPTextEncode 注入正向提示词
         if (wf["4"] && wf["4"].class_type === "CLIPTextEncode") wf["4"].inputs.text = prompt;
+        // 二采工作流：阶段2 的正向提示词节点 "25" 复用同一提示词
+        if (wf["25"] && wf["25"].class_type === "CLIPTextEncode") wf["25"].inputs.text = prompt;
         // latent 节点：EmptyFlux2LatentImage / EmptySD3LatentImage / EmptyLatentImage
         for (const key of ["6"]) {
           if (wf[key] && wf[key].inputs && "width" in wf[key].inputs) {
@@ -677,6 +706,48 @@ async function handleVideoSubmit(req, res) {
     return json(res, 200, { id: taskId, status: "queued", created: Math.floor(Date.now() / 1000) });
   } catch (e) {
     console.error("视频提交错误:", e.message);
+    return json(res, 500, { error: { message: e.message, type: "server_error" } });
+  }
+}
+
+/** POST /v1/videos/upscale —— RelayVSR 视频 2x 放大（接收画布上传的 MP4） */
+async function handleVideoUpscale(req, res) {
+  try {
+    const registry = readRegistry();
+    const wfCfg = (registry.workflows || []).find((w) => w.id === "relayvsr-x2-upscale") || {};
+    const missing = (wfCfg.models || []).filter((m) => !isModelInstalled(m.file, m.sizeBytes).installed).map((m) => m.file);
+    if (missing.length) {
+      return json(res, 400, { error: { message: `RelayVSR 放大尚未安装完成，缺少：${missing.join("、")}。请到「工作流」面板下载安装。` } });
+    }
+
+    const raw = await readBody(req, 500 * 1024 * 1024);
+    const ct = req.headers["content-type"] || "";
+    const boundary = /boundary=(?:"([^"]+)"|([^;]+))/.exec(ct);
+    if (!ct.includes("multipart/form-data") || !boundary) {
+      return json(res, 400, { error: { message: "放大视频需要 multipart/form-data 上传文件" } });
+    }
+    const { files } = parseMultipart(raw, boundary[1] || boundary[2]);
+    const fileKey = Object.keys(files)[0];
+    if (!fileKey || !files[fileKey]?.length) return json(res, 400, { error: { message: "未收到视频文件" } });
+    const vf = files[fileKey][0];
+    const ext = path.extname(vf.filename) || ".mp4";
+    const inputName = await uploadVideoFile(vf.data, `upscale_${Date.now()}${ext}`);
+
+    const wf = JSON.parse(fs.readFileSync(UPSCALE_WORKFLOW, "utf8"));
+    if (wf["1"] && wf["1"].inputs) wf["1"].inputs.file = inputName;
+
+    const taskId = "up_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
+    videoTasks.set(taskId, {
+      status: "queued",
+      created: Math.floor(Date.now() / 1000),
+      file: null,
+      error: null,
+      meta: { model: "video-relayvsr-x2", source: vf.filename, kind: "upscale" },
+    });
+    processVideoTask(taskId, wf);
+    return json(res, 200, { id: taskId, status: "queued", created: Math.floor(Date.now() / 1000) });
+  } catch (e) {
+    console.error("视频放大提交错误:", e.message);
     return json(res, 500, { error: { message: e.message, type: "server_error" } });
   }
 }
@@ -1175,6 +1246,10 @@ const server = http.createServer(async (req, res) => {
     // 视频：提交
     if (req.method === "POST" && url.pathname === "/v1/videos") {
       return await handleVideoSubmit(req, res);
+    }
+    // 视频放大：RelayVSR 2x（注意放在 /v1/videos/{id} 通配之前）
+    if (req.method === "POST" && url.pathname === "/v1/videos/upscale") {
+      return await handleVideoUpscale(req, res);
     }
     // 视频：查状态 / 取内容
     let m;

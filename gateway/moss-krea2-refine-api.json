@@ -1,0 +1,305 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "moss_image_sft_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "MOSS-Image SFT int8（构图）"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3.5_9b_w4a8_gptq.safetensors",
+      "type": "moss_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen3.5 9B (MOSS)"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae_small.safetensors"
+    },
+    "_meta": {
+      "title": "FLUX.2 small VAE（MOSS 用）"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "提示词（正向）"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "提示词（负向·MOSS）"
+    }
+  },
+  "6": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Latent（构图尺寸）"
+    }
+  },
+  "10": {
+    "class_type": "TESpeedMoss",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "attention": "default",
+      "step_cache": "te_predictor 2"
+    },
+    "_meta": {
+      "title": "TE-Speed MOSS 加速"
+    }
+  },
+  "11": {
+    "class_type": "SkipLayerGuidanceDiTSimple",
+    "inputs": {
+      "model": [
+        "10",
+        0
+      ],
+      "double_layers": "7, 8, 9",
+      "single_layers": "7, 8, 9",
+      "start_percent": 0.0,
+      "end_percent": 0.5
+    },
+    "_meta": {
+      "title": "跳过层引导（提细节）"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "11",
+        0
+      ],
+      "seed": 438829726369282,
+      "steps": 25,
+      "cfg": 2.5,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ],
+      "denoise": 1
+    },
+    "_meta": {
+      "title": "MOSS 构图采样（25 步）"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "解码构图"
+    }
+  },
+  "20": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "krea2_turbo_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Krea2 Turbo int8（二采）"
+    }
+  },
+  "21": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen3VL 4B fp8 (Krea2)"
+    }
+  },
+  "22": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "Qwen Image VAE（Krea2 用）"
+    }
+  },
+  "25": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "21",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "提示词（二采正向，复用）"
+    }
+  },
+  "26": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "21",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "提示词（二采负向·置零）"
+    }
+  },
+  "27": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "26",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "负向置零"
+    }
+  },
+  "77": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "8",
+        0
+      ],
+      "vae": [
+        "22",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "构图编码为 latent"
+    }
+  },
+  "78": {
+    "class_type": "LatentUpscaleBy",
+    "inputs": {
+      "samples": [
+        "77",
+        0
+      ],
+      "upscale_method": "bicubic",
+      "scale_by": 1.2
+    },
+    "_meta": {
+      "title": "Latent 1.2x 放大"
+    }
+  },
+  "76": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": [
+        "20",
+        0
+      ],
+      "add_noise": "enable",
+      "noise_seed": 444063120451975,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "er_sde",
+      "scheduler": "beta",
+      "positive": [
+        "25",
+        0
+      ],
+      "negative": [
+        "27",
+        0
+      ],
+      "latent_image": [
+        "78",
+        0
+      ],
+      "start_at_step": 0,
+      "end_at_step": 8,
+      "return_with_leftover_noise": "disable"
+    },
+    "_meta": {
+      "title": "Krea2 二采细化（8 步）"
+    }
+  },
+  "79": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "76",
+        0
+      ],
+      "vae": [
+        "22",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "解码成图"
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "79",
+        0
+      ],
+      "filename_prefix": "MOSS-KREA2-%date:yyyyMMddhhmmss%"
+    },
+    "_meta": {
+      "title": "保存"
+    }
+  }
+}

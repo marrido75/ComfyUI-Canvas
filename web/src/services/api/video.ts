@@ -134,6 +134,36 @@ function videoPluginResult(result: unknown): VideoGenerationResult {
     throw new Error(apiText("scriptNoVideo"));
 }
 
+/**
+ * RelayVSR 视频 2x 放大：把已有视频文件发给本地网关，异步任务完成后返回放大后的 Blob。
+ * 仅用于本地网关（127.0.0.1:8190）；其他后端不支持。
+ */
+export async function upscaleVideo2x(config: AiConfig, sourceBlob: Blob, filename = "source.mp4", options?: RequestOptions): Promise<VideoGenerationResult> {
+    const body = new FormData();
+    body.append("video", sourceBlob, filename);
+    try {
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos/upscale"), body, { headers: aiHeaders(config), signal: options?.signal })).data);
+        if (!created.id) throw new Error(apiText("noVideoTaskId"));
+        const deadline = Date.now() + 10 * 60 * 1000;
+        while (Date.now() < deadline) {
+            if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            const state = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${created.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
+            if (state.status === "completed") {
+                const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${created.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
+                await assertVideoBlob(content.data);
+                return { blob: content.data };
+            }
+            if (state.status === "failed") throw new Error(readApiErrorMessage(state.error?.message) || apiText("videoGenerationFailed"));
+            await delay(2000, options?.signal);
+        }
+        throw new Error(apiText("videoTimeout", { provider: "" }));
+    } catch (error) {
+        if (axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError")) throw error;
+        if (error instanceof Error && error.name === "VideoTaskFailed") throw error;
+        throw new Error(readAxiosError(error, apiText("videoTaskCreateFailed")));
+    }
+}
+
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
     if (result.blob) return uploadMediaFile(result.blob, "video");
     if (result.url) {

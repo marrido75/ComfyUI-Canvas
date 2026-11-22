@@ -8,10 +8,10 @@ import { useTranslation } from "react-i18next";
 import { fetchGenerationProgress, requestEdit, requestGeneration, requestImageQuestion, requestOutpaint } from "@/services/api/image";
 import { fetchReadyImageModelIds } from "@/services/api/workflow";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
+import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, upscaleVideo2x, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { ensureImagePreview, uploadImage } from "@/services/image-storage";
-import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
@@ -2185,6 +2185,46 @@ function InfiniteCanvasPage() {
         setDialogNodeId(childId);
     }, []);
 
+    /** RelayVSR 视频 2x 放大：深拷贝源视频到新节点，不改动原节点 */
+    const upscaleVideoNode = useCallback(async (node: CanvasNodeData) => {
+        if (!node.metadata?.content) return;
+        const hide = message.loading(t("canvas.nodeToolbar.videoUpscaling"), 0);
+        try {
+            let blob: Blob | null = null;
+            if (node.metadata.storageKey) {
+                blob = await getMediaBlob(node.metadata.storageKey);
+            }
+            if (!blob) {
+                const resp = await fetch(node.metadata.content);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                blob = await resp.blob();
+            }
+            if (!blob || !blob.size) throw new Error("empty video");
+            const result = await upscaleVideo2x(effectiveConfig, blob, `${node.title || "source"}.mp4`);
+            const uploaded = await storeGeneratedVideo(result);
+            const size = fitNodeSize(uploaded.width || node.width * 2, uploaded.height || node.height * 2, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+            const childId = nanoid();
+            const child: CanvasNodeData = {
+                id: childId,
+                type: CanvasNodeType.Video,
+                title: `${node.title || t("assets.kinds.video")} · 2x`,
+                position: { x: node.position.x + node.width + 96, y: node.position.y },
+                width: size.width,
+                height: size.height,
+                metadata: { ...videoMetadata(uploaded), prompt: node.metadata?.prompt },
+            };
+            setNodes((prev) => [...prev, child]);
+            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
+            setSelectedNodeIds(new Set([childId]));
+            setDialogNodeId(childId);
+            hide();
+            message.success(t("canvas.nodeToolbar.videoUpscaleDone"));
+        } catch (e) {
+            hide();
+            message.error(`${t("canvas.nodeToolbar.videoUpscaleFailed")}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }, [effectiveConfig, message, t]);
+
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
@@ -3439,7 +3479,7 @@ function InfiniteCanvasPage() {
                     onCrop={(node) => setCropNodeId(node.id)}
                     onSplit={(node) => setSplitNodeId(node.id)}
                     onUpscale={(node) => setUpscaleNodeId(node.id)}
-                    onSuperResolve={(node) => setSuperResolveNodeId(node.id)}
+                    onSuperResolve={(node) => node.type === CanvasNodeType.Video ? void upscaleVideoNode(node) : setSuperResolveNodeId(node.id)}
                     onAngle={(node) => setAngleNodeId(node.id)}
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}

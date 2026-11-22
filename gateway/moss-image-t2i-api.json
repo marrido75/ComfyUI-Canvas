@@ -48,10 +48,30 @@
     },
     "_meta": { "title": "Latent（空）" }
   },
+  "10": {
+    "class_type": "TESpeedMoss",
+    "inputs": {
+      "model": ["1", 0],
+      "attention": "default",
+      "step_cache": "te_predictor 2"
+    },
+    "_meta": { "title": "TE-Speed MOSS 加速（预测跳步，约 4x）" }
+  },
+  "11": {
+    "class_type": "SkipLayerGuidanceDiTSimple",
+    "inputs": {
+      "model": ["10", 0],
+      "double_layers": "7, 8, 9",
+      "single_layers": "7, 8, 9",
+      "start_percent": 0.0,
+      "end_percent": 0.5
+    },
+    "_meta": { "title": "跳过层引导（提细节）" }
+  },
   "7": {
     "class_type": "KSampler",
     "inputs": {
-      "model": ["1", 0],
+      "model": ["11", 0],
       "seed": 438829726369282,
       "steps": 25,
       "cfg": 2.5,
