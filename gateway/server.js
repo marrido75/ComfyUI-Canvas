@@ -161,16 +161,33 @@ function connectProgressSocket() {
         t.status = "running"; t.step = 0; t.total = 0; t.percentage = 0;
         t.startedAt = t.startedAt || Date.now(); t.updatedAt = Date.now();
         progressTasks.set(d.prompt_id, t);
-      } else if (msg.type === "progress" && typeof d.value === "number" && typeof d.max === "number" && d.max > 0) {
-        const t = progressTasks.get(d.prompt_id) || {};
-        t.status = "running"; t.step = d.value; t.total = d.max;
-        t.percentage = Math.max(0, Math.min(100, Math.round((d.value / d.max) * 100)));
-        t.startedAt = t.startedAt || Date.now(); t.updatedAt = Date.now();
-        progressTasks.set(d.prompt_id, t);
-      } else if (msg.type === "executing" && d.node === null) {
-        // 节点为 null 表示整个任务执行完毕
+      } else if (msg.type === "progress" || msg.type === "progress_state") {
+        // 兼容两代 ComfyUI 进度消息：
+        //   旧版 progress:       data.value / data.max
+        //   新版 progress_state: data.nodes[nodeId].value / .max（可能多个节点，取正在跑的采样节点）
+        let value = null, max = null;
+        if (typeof d.value === "number" && typeof d.max === "number" && d.max > 0) {
+          value = d.value; max = d.max;
+        } else if (d.nodes && typeof d.nodes === "object") {
+          let best = null;
+          for (const node of Object.values(d.nodes)) {
+            if (!node || typeof node.value !== "number" || typeof node.max !== "number" || node.max <= 0) continue;
+            // 优先取仍在运行的节点，避免被已 finished 的辅助节点（如 VAE/文本编码 1/1）覆盖
+            if (!best || (node.state !== "finished" && best.state === "finished")) best = node;
+          }
+          if (best) { value = best.value; max = best.max; }
+        }
+        if (value != null && max != null) {
+          const t = progressTasks.get(d.prompt_id) || {};
+          t.status = "running"; t.step = value; t.total = max;
+          t.percentage = Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+          t.startedAt = t.startedAt || Date.now(); t.updatedAt = Date.now();
+          progressTasks.set(d.prompt_id, t);
+        }
+      } else if ((msg.type === "executing" && d.node === null) || msg.type === "execution_success") {
+        // 任务执行完毕（新版还会发 execution_success）
         const t = progressTasks.get(d.prompt_id);
-        if (t) { t.status = "done"; t.updatedAt = Date.now(); }
+        if (t) { t.status = "done"; t.percentage = 100; t.updatedAt = Date.now(); }
       }
     };
     ws.onclose = () => { setTimeout(connectProgressSocket, 2000); }; // 断线重连
