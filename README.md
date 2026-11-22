@@ -47,7 +47,23 @@ node gateway/serve-canvas.js   # 画布 3000
 
 详细配置、模型清单和常见问题见 **[本地网关说明.md](本地网关说明.md)**。
 
-## 模型清单（MiniMax H3）
+## 模型清单
+
+### Qwen Image 2.1（文生图 / 图生图）
+
+生图链路使用的模型，总计约 16.1G：
+
+| 目录 | 文件 | 大小 |
+|---|---|---|
+| `models/diffusion_models/` | qwen_image_2.1_turbo_int8_convrot.safetensors | 6.8G |
+| `models/text_encoders/` | qwen3vl_8b_int8_convrot.safetensors | 8.7G |
+| `models/vae/` | qwen_image_2.1_vae_bf16.safetensors | 0.6G |
+
+文生图走 `qwen-t2i.json`（注入 SageAttention 加速，约 8 秒/张）；图生图走 `qwen-edit.json`，参考图通过 `LoadImage` 节点注入。
+
+### MiniMax H3（文生视频）
+
+视频链路使用的模型，来自 ModelScope 的 `Comfy-Org/MiniMax-H3`，总计约 34.5G：
 
 | 目录 | 文件 | 大小 |
 |---|---|---|
@@ -56,5 +72,3 @@ node gateway/serve-canvas.js   # 画布 3000
 | `models/vae/` | minimax_h3_video_vae_int8_convrot.safetensors | 2.6G |
 | `models/vae/` | minimax_h3_audio_vae_fp32.safetensors | 0.6G |
 | `models/loras/` | minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors | 1.8G |
-
-模型来自 ModelScope 的 `Comfy-Org/MiniMax-H3`，总计约 34.5G。
