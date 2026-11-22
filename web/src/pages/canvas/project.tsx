@@ -2203,6 +2203,7 @@ function InfiniteCanvasPage() {
                 status: NODE_STATUS_LOADING,
                 model: "video-relayvsr-x2",
                 videoMode: "upscale",
+                genProgress: { percentage: 0, step: 0, total: 100, elapsed: 0 },
             },
         };
         setNodes((prev) => [...prev, child]);
@@ -2221,7 +2222,12 @@ function InfiniteCanvasPage() {
                 blob = await resp.blob();
             }
             if (!blob || !blob.size) throw new Error("empty video");
-            const result = await upscaleVideo2x(effectiveConfig, blob, `${node.title || "source"}.mp4`);
+            const result = await upscaleVideo2x(effectiveConfig, blob, `${node.title || "source"}.mp4`, undefined, (percentage, elapsed) => {
+                setNodes((prev) => prev.map((item) => (item.id === childId ? {
+                    ...item,
+                    metadata: { ...item.metadata, genProgress: { percentage, step: percentage, total: 100, elapsed } },
+                } : item)));
+            });
             const uploaded = await storeGeneratedVideo(result);
             const size = fitNodeSize(uploaded.width || node.width * 2, uploaded.height || node.height * 2, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
             setNodes((prev) => prev.map((item) => (item.id === childId ? {

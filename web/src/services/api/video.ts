@@ -15,6 +15,8 @@ type VideoResponse = { id: string; status?: string; error?: { message?: string }
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
+/** 进度回调：percentage 0-100，elapsed 秒 */
+type ProgressCallback = (percentage: number, elapsed: number) => void;
 type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -138,23 +140,33 @@ function videoPluginResult(result: unknown): VideoGenerationResult {
  * RelayVSR 视频 2x 放大：把已有视频文件发给本地网关，异步任务完成后返回放大后的 Blob。
  * 仅用于本地网关（127.0.0.1:8190）；其他后端不支持。
  */
-export async function upscaleVideo2x(config: AiConfig, sourceBlob: Blob, filename = "source.mp4", options?: RequestOptions): Promise<VideoGenerationResult> {
+export async function upscaleVideo2x(config: AiConfig, sourceBlob: Blob, filename = "source.mp4", options?: RequestOptions, onProgress?: ProgressCallback): Promise<VideoGenerationResult> {
     const body = new FormData();
     body.append("video", sourceBlob, filename);
+    const startedAt = Date.now();
+    // RelayVSR 实际约 20s 完成；进度按时间平滑逼近 90%，完成时置 100%
+    const reportProgress = () => {
+        if (!onProgress) return;
+        const elapsed = (Date.now() - startedAt) / 1000;
+        const estimate = Math.min(90, Math.round((1 - Math.exp(-elapsed / 9)) * 90));
+        onProgress(estimate, elapsed);
+    };
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos/upscale"), body, { headers: aiHeaders(config), signal: options?.signal })).data);
         if (!created.id) throw new Error(apiText("noVideoTaskId"));
         const deadline = Date.now() + 10 * 60 * 1000;
         while (Date.now() < deadline) {
             if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            reportProgress();
             const state = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${created.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
             if (state.status === "completed") {
+                onProgress?.(100, (Date.now() - startedAt) / 1000);
                 const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${created.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
                 await assertVideoBlob(content.data);
                 return { blob: content.data };
             }
             if (state.status === "failed") throw new Error(readApiErrorMessage(state.error?.message) || apiText("videoGenerationFailed"));
-            await delay(2000, options?.signal);
+            await delay(600, options?.signal);
         }
         throw new Error(apiText("videoTimeout", { provider: "" }));
     } catch (error) {
