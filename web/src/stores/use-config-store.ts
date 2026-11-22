@@ -56,6 +56,7 @@ export type AiConfig = {
     proxyUrl: string;
     nodeRegenerateBehavior: "new-node" | "overwrite";
     autoFocusOnSelect: boolean;
+    showPluginsButton: boolean;
 };
 
 export type WebdavSyncConfig = {
@@ -65,7 +66,7 @@ export type WebdavSyncConfig = {
     directory: string;
     lastSyncedAt: string;
 };
-export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
+export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "node-plugins" | "prompt-sources" | "webdav" | "local-storage";
 
 export type ChannelCredentialsImportResult = {
     status: "created" | "updated" | "missing-base-url" | "invalid-base-url";
@@ -125,6 +126,7 @@ export const defaultConfig: AiConfig = {
     proxyUrl: DEFAULT_LOCAL_PROXY_URL,
     nodeRegenerateBehavior: "new-node",
     autoFocusOnSelect: false,
+    showPluginsButton: true,
 };
 
 export const defaultWebdavSyncConfig: WebdavSyncConfig = {
@@ -142,6 +144,7 @@ type ConfigStore = {
     configTab: ConfigTabKey;
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+    syncGatewayImageModels: (readyIds: string[]) => void;
     importChannelCredentials: (input: { baseUrl?: string | null; apiKey?: string | null }) => ChannelCredentialsImportResult;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
@@ -167,22 +170,27 @@ export function guessCapability(name: string): ModelCapability {
     return "text";
 }
 
-// 本地 ComfyUI 极简网关提供的模型：在合并历史配置时自动补齐，
+// 本地 ComfyUI 极简网关的基础模型：在合并历史配置时自动补齐，
 // 避免用户只配了文生图、视频下拉为空（提示"请先在渠道里为视频指定模型"）。
+// 额外文生图模型（MOSS/Z-Image/Krea2）不在这里静态补齐——它们的可见性由网关
+// /v1/models 的 ready 状态动态决定（只有模型下载齐全才出现在下拉里）。
 const LOCAL_GATEWAY_BASE_MARKERS = ["127.0.0.1:8190", "localhost:8190"];
-const LOCAL_GATEWAY_MODELS: ChannelModel[] = [
+const LOCAL_GATEWAY_BASE_MODELS: ChannelModel[] = [
     { name: "image-qwen21", capability: "image" },
     { name: "video-minimax-h3", capability: "video" },
 ];
+// 由网关动态追加的额外图片模型 -> capability
+const DYNAMIC_IMAGE_MODEL_IDS = ["image-moss", "image-zimage", "image-krea2"];
 
 function ensureLocalGatewayModels(channels: ModelChannel[]): ModelChannel[] {
     return channels.map((channel) => {
         const base = (channel.baseUrl || "").toLowerCase();
         const isLocalGateway = LOCAL_GATEWAY_BASE_MARKERS.some((marker) => base.includes(marker));
         if (!isLocalGateway) return channel;
-        const models = [...channel.models];
-        let changed = false;
-        for (const expected of LOCAL_GATEWAY_MODELS) {
+        // 先剔除旧版本可能静态写入的额外图片模型（其可见性改为由网关动态决定）
+        const models = channel.models.filter((m) => !DYNAMIC_IMAGE_MODEL_IDS.includes(m.name));
+        let changed = models.length !== channel.models.length;
+        for (const expected of LOCAL_GATEWAY_BASE_MODELS) {
             const existing = models.find((m) => m.name === expected.name);
             if (!existing) {
                 models.push({ ...expected });
@@ -194,6 +202,34 @@ function ensureLocalGatewayModels(channels: ModelChannel[]): ModelChannel[] {
         }
         return changed ? { ...channel, models } : channel;
     });
+}
+
+/**
+ * 用网关返回的就绪图片模型列表，重建本地网关 channel 的模型。
+ * 只保留：基础模型 + 网关 ready=true 的额外图片模型；移除未就绪的额外模型。
+ * 返回新 config（未变化时返回原对象）。
+ */
+export function applyGatewayImageModels(config: AiConfig, readyIds: string[]): AiConfig {
+    const readySet = new Set(readyIds);
+    let changed = false;
+    const channels = (config.channels || []).map((channel) => {
+        const base = (channel.baseUrl || "").toLowerCase();
+        if (!LOCAL_GATEWAY_BASE_MARKERS.some((marker) => base.includes(marker))) return channel;
+        // 保留非动态模型，加上 ready 的动态图片模型
+        const kept = channel.models.filter((m) => !DYNAMIC_IMAGE_MODEL_IDS.includes(m.name));
+        const next = [...kept];
+        for (const id of DYNAMIC_IMAGE_MODEL_IDS) {
+            if (readySet.has(id) && !next.some((m) => m.name === id)) {
+                next.push({ name: id, capability: "image" });
+                changed = true;
+            }
+        }
+        if (next.length !== channel.models.length || next.some((m, i) => m.name !== channel.models[i]?.name)) changed = true;
+        return next.length === channel.models.length && next.every((m, i) => m.name === channel.models[i]?.name) ? channel : { ...channel, models: next };
+    });
+    if (!changed) return config;
+    const models = modelOptionsFromChannels(channels);
+    return { ...config, channels, models };
 }
 
 function findChannelModel(config: AiConfig, value: string): { channel: ModelChannel; model: ChannelModel } | null {
@@ -256,6 +292,11 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
+            syncGatewayImageModels: (readyIds) =>
+                set((state) => {
+                    const next = applyGatewayImageModels(state.config, readyIds);
+                    return next === state.config ? {} : { config: next };
+                }),
             importChannelCredentials: (input) => {
                 const currentConfig = get().config;
                 const result = upsertChannelCredentials(currentConfig, input);
@@ -313,6 +354,7 @@ export const useConfigStore = create<ConfigStore>()(
                         proxyUrl: config.proxyUrl || DEFAULT_LOCAL_PROXY_URL,
                         nodeRegenerateBehavior: config.nodeRegenerateBehavior === "overwrite" ? "overwrite" : "new-node",
                         autoFocusOnSelect: Boolean(config.autoFocusOnSelect),
+                        showPluginsButton: config.showPluginsButton !== false,
                     },
                 };
             },

@@ -28,8 +28,9 @@ if "%COMFY_CODE%"=="200" (
     timeout /t 30 /nobreak >nul
 )
 
-REM 2. 启动网关
+REM 2. 启动网关（COMFY_DIR 指向 ComfyUI 根目录，用于模型检测与下载）
 echo [2/3] 启动网关 (8190)...
+if "%COMFY_DIR%"=="" set "COMFY_DIR=D:\ComfyUI-Easy\ComfyUI_windows_portable\ComfyUI"
 start "画布网关" /D "%~dp0" cmd /c ""%~dp0node\node.exe" gateway\server.js"
 timeout /t 2 /nobreak >nul
 

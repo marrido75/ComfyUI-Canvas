@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
+import { CanvasPluginPanel } from "@/components/canvas/canvas-plugin-panel";
 import { videoResolutionOptions } from "@/components/video-settings-panel";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
@@ -287,6 +288,13 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                         <Switch checked={config.autoFocusOnSelect} onChange={(checked) => updateConfig("autoFocusOnSelect", checked)} />
                                     </div>
                                 </Form.Item>
+                                <Form.Item className="mb-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="text-sm">{t("config.preferences.showPluginsButton")}</span>
+                                        <Switch checked={config.showPluginsButton} onChange={(checked) => updateConfig("showPluginsButton", checked)} />
+                                    </div>
+                                    <div className="mt-1 text-xs opacity-60">{t("config.preferences.showPluginsButtonDescription")}</div>
+                                </Form.Item>
                                 <Form.Item label={t("config.preferences.audioInstructions")} className="mb-4">
                                     <Input.TextArea rows={2} value={config.audioInstructions} placeholder={t("config.preferences.audioInstructionsPlaceholder")} onChange={(event) => updateConfig("audioInstructions", event.target.value)} />
                                 </Form.Item>
@@ -295,6 +303,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                 </Form.Item>
                             </Form>
                         ),
+                    },
+                    {
+                        key: "node-plugins",
+                        label: t("config.tabs.nodePlugins"),
+                        children: <CanvasPluginPanel active={activeTab === "node-plugins"} />,
                     },
                     {
                         key: "prompt-sources",

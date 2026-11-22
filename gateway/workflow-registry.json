@@ -1,0 +1,148 @@
+{
+  "note": "工作流注册表：existing=本地网关已支持的工作流；available=可从 ModelScope 下载模型安装的额外生图工作流。sizeBytes 来自 ModelScope 仓库真实文件大小。",
+  "workflows": [
+    {
+      "id": "qwen21-t2i",
+      "name": "Qwen Image 2.1 文生图",
+      "nameEn": "Qwen Image 2.1 Text to Image",
+      "description": "8 步 Turbo 文生图，中文文字渲染强，SageAttention 加速约 8 秒出图。",
+      "status": "existing",
+      "icon": "Image",
+      "models": [
+        { "role": "扩散模型", "file": "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors", "sizeBytes": 7256787829 },
+        { "role": "文本编码器", "file": "text_encoders/qwen3vl_8b_int8_convrot.safetensors", "sizeBytes": 9350798360 },
+        { "role": "VAE", "file": "vae/qwen_image_2.1_vae_bf16.safetensors", "sizeBytes": 675509688 }
+      ]
+    },
+    {
+      "id": "qwen21-edit",
+      "name": "Qwen Image 2.1 图生图 / 编辑",
+      "nameEn": "Qwen Image 2.1 Image Edit",
+      "description": "参考图编辑与局部重绘，配合一致性 LoRA 保持主体不变。",
+      "status": "existing",
+      "icon": "ImageEdit",
+      "models": [
+        { "role": "扩散模型", "file": "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors", "sizeBytes": 7256787829 },
+        { "role": "文本编码器", "file": "text_encoders/qwen3vl_8b_int8_convrot.safetensors", "sizeBytes": 9350798360 },
+        { "role": "VAE", "file": "vae/qwen_image_2.1_vae_bf16.safetensors", "sizeBytes": 675509688 },
+        { "role": "LoRA · 一致性", "file": "loras/Qwen2.1 一致性无偏移_GH_V1.0.safetensors", "sizeBytes": 159436400 },
+        { "role": "LoRA · 扩图", "file": "loras/Qwen2.1_扩图_GH_3750.safetensors", "sizeBytes": 159436392 },
+        { "role": "LoRA · 移除", "file": "loras/Qwen2.1_万物移除Remove_GH.safetensors", "sizeBytes": 159436392 }
+      ]
+    },
+    {
+      "id": "minimax-h3-t2v",
+      "name": "MiniMax H3 文生视频",
+      "nameEn": "MiniMax H3 Text to Video",
+      "description": "端到端带音轨 MP4 视频生成（864×480）。",
+      "status": "existing",
+      "icon": "Video",
+      "models": [
+        { "role": "扩散模型", "file": "diffusion_models/minimax_h3_fl2va_pruned_w6a8.safetensors", "sizeBytes": 15983746636 },
+        { "role": "文本编码器", "file": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "sizeBytes": 15687142551 },
+        { "role": "视频 VAE", "file": "vae/minimax_h3_video_vae_int8_convrot.safetensors", "sizeBytes": 2811065184 },
+        { "role": "音频 VAE", "file": "vae/minimax_h3_audio_vae_fp32.safetensors", "sizeBytes": 605254808 },
+        { "role": "LoRA · Turbo 4step", "file": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors", "sizeBytes": 1956192992 }
+      ]
+    },
+    {
+      "id": "z-image",
+      "name": "Z-Image 文生图",
+      "nameEn": "Z-Image Text to Image",
+      "description": "阿里通义 Z-Image Turbo，人像与写实出色，三件套约 11 GB（int8）。",
+      "status": "available",
+      "icon": "Image",
+      "workflowUrl": "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/main/templates/image_z_image.json",
+      "workflowFile": "z-image-t2i.json",
+      "models": [
+        {
+          "role": "扩散模型",
+          "file": "diffusion_models/z_image_turbo_int8_convrot.safetensors",
+          "sizeBytes": 6205474304,
+          "repo": "Comfy-Org/z_image_turbo",
+          "remotePath": "split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors"
+        },
+        {
+          "role": "文本编码器",
+          "file": "text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+          "sizeBytes": 5637144576,
+          "repo": "Comfy-Org/z_image_turbo",
+          "remotePath": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors"
+        },
+        {
+          "role": "VAE",
+          "file": "vae/ae.safetensors",
+          "sizeBytes": 332859392,
+          "repo": "Comfy-Org/z_image_turbo",
+          "remotePath": "split_files/vae/ae.safetensors"
+        }
+      ]
+    },
+    {
+      "id": "krea2",
+      "name": "Krea 2 文生图",
+      "nameEn": "Krea 2 Text to Image",
+      "description": "Krea 2 Turbo 艺术绘画强，int8 量化版，三件套约 19 GB。",
+      "status": "available",
+      "icon": "Palette",
+      "workflowUrl": "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/main/templates/image_krea2_turbo_t2i.json",
+      "workflowFile": "krea2-t2i.json",
+      "models": [
+        {
+          "role": "扩散模型",
+          "file": "diffusion_models/krea2_turbo_int8_convrot.safetensors",
+          "sizeBytes": 13498405274,
+          "repo": "Comfy-Org/Krea-2",
+          "remotePath": "diffusion_models/krea2_turbo_int8_convrot.safetensors"
+        },
+        {
+          "role": "文本编码器",
+          "file": "text_encoders/qwen3vl_4b_int8_convrot.safetensors",
+          "sizeBytes": 4854071296,
+          "repo": "Comfy-Org/Krea-2",
+          "remotePath": "text_encoders/qwen3vl_4b_int8_convrot.safetensors"
+        },
+        {
+          "role": "VAE",
+          "file": "vae/qwen_image_vae.safetensors",
+          "sizeBytes": 257698048,
+          "repo": "Comfy-Org/Krea-2",
+          "remotePath": "vae/qwen_image_vae.safetensors"
+        }
+      ]
+    },
+    {
+      "id": "moss-image",
+      "name": "MOSS-Image 文生图",
+      "nameEn": "MOSS-Image Text to Image",
+      "description": "OpenMOSS 5B，中英文文字渲染 + JSON 布局排版，SFT int8 三件套约 12 GB。需较新 ComfyUI（含 MOSS 原生支持）。",
+      "status": "available",
+      "icon": "Type",
+      "workflowUrl": "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/main/templates/image_moss_image_t2i.json",
+      "workflowFile": "moss-image-t2i.json",
+      "models": [
+        {
+          "role": "扩散模型 · SFT int8",
+          "file": "diffusion_models/moss_image_sft_int8_convrot.safetensors",
+          "sizeBytes": 5411651994,
+          "repo": "Comfy-Org/MOSS-Image",
+          "remotePath": "diffusion_models/moss_image_sft_int8_convrot.safetensors"
+        },
+        {
+          "role": "文本编码器 · w4a8",
+          "file": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+          "sizeBytes": 7345885184,
+          "repo": "Comfy-Org/MOSS-Image",
+          "remotePath": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors"
+        },
+        {
+          "role": "VAE · FLUX.2 small",
+          "file": "vae/flux2-vae_small.safetensors",
+          "sizeBytes": 246960640,
+          "repo": "Comfy-Org/MOSS-Image",
+          "remotePath": "vae/flux2-vae_small.safetensors"
+        }
+      ]
+    }
+  ]
+}

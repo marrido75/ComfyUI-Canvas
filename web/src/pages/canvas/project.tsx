@@ -6,6 +6,7 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { fetchGenerationProgress, requestEdit, requestGeneration, requestImageQuestion, requestOutpaint } from "@/services/api/image";
+import { fetchReadyImageModelIds } from "@/services/api/workflow";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -73,6 +74,7 @@ import {
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasPluginManagerModal } from "@/components/canvas/canvas-plugin-manager-modal";
+import { CanvasWorkflowModal } from "@/components/canvas/canvas-workflow-modal";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
 import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
@@ -257,6 +259,7 @@ function InfiniteCanvasPage() {
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
     const [infoNodeId, setInfoNodeId] = useState<string | null>(null);
     const [pluginManagerOpen, setPluginManagerOpen] = useState(false);
+    const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
     const [cropNodeId, setCropNodeId] = useState<string | null>(null);
     const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
     const [outpaintNodeId, setOutpaintNodeId] = useState<string | null>(null);
@@ -508,6 +511,20 @@ function InfiniteCanvasPage() {
         nodesRef.current.filter(hasResumableVideoTask).forEach((node) => void pollVideoNodeTask(node, true));
         // Resume once after the current canvas is restored, not on later config identity changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [projectLoaded]);
+
+    // 画布加载后，从网关拉取就绪的图片模型，动态刷新下拉（只有模型下齐全的才显示）
+    useEffect(() => {
+        if (!projectLoaded) return;
+        let cancelled = false;
+        const sync = () => {
+            void fetchReadyImageModelIds()
+                .then((ids) => { if (!cancelled) useConfigStore.getState().syncGatewayImageModels(ids); })
+                .catch(() => { /* 网关不在线时保留基础模型即可 */ });
+        };
+        sync();
+        const timer = window.setInterval(sync, 30000); // 定时刷新：下载完成后无需刷新页面也能出现
+        return () => { cancelled = true; window.clearInterval(timer); };
     }, [projectLoaded]);
 
     useEffect(() => {
@@ -3257,6 +3274,7 @@ function InfiniteCanvasPage() {
                     onExportProject={exportCurrentProject}
                     onImportImage={() => handleUploadRequest()}
                     onOpenPlugins={() => setPluginManagerOpen(true)}
+                    onOpenWorkflows={() => setWorkflowModalOpen(true)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     agentOpen={agentPanelOpen}
@@ -3505,6 +3523,7 @@ function InfiniteCanvasPage() {
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
                 <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
+                <CanvasWorkflowModal open={workflowModalOpen} onClose={() => setWorkflowModalOpen(false)} />
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode!, crop)} /> : null}
 

@@ -33,10 +33,37 @@ const EDIT_WORKFLOW = path.join(__dirname, "qwen-edit.json");
 const INPAINT_WORKFLOW = path.join(__dirname, "qwen-inpaint.json");
 const OUTPAINT_WORKFLOW = path.join(__dirname, "qwen-outpaint.json");
 const VIDEO_WORKFLOW = path.join(__dirname, "h3-t2v.json");
+// 额外的文生图模型：model id -> { 显示名, API 工作流, 注册表工作流 id }
+// API 工作流是从 ComfyUI 官方 UI/subgraph 模板重构成的扁平 API 格式，网关可直接提交。
+const EXTRA_IMAGE_MODELS = {
+  "image-moss": {
+    display: "MOSS-Image 文生图",
+    displayEn: "MOSS-Image Text to Image",
+    workflow: path.join(__dirname, "moss-image-t2i-api.json"),
+    registryId: "moss-image",
+  },
+  "image-zimage": {
+    display: "Z-Image Turbo 文生图",
+    displayEn: "Z-Image Turbo Text to Image",
+    workflow: path.join(__dirname, "z-image-t2i-api.json"),
+    registryId: "z-image",
+  },
+  "image-krea2": {
+    display: "Krea 2 文生图",
+    displayEn: "Krea 2 Text to Image",
+    workflow: path.join(__dirname, "krea2-t2i-api.json"),
+    registryId: "krea2",
+  },
+};
 const VIDEO_OUT_DIR = path.join(__dirname, "video-outputs");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const VERSION_FILE = path.join(PROJECT_ROOT, "VERSION");
 const CHANGELOG_FILE = path.join(PROJECT_ROOT, "CHANGELOG.md");
+const REGISTRY_FILE = path.join(__dirname, "workflow-registry.json");
+// ComfyUI 根目录：优先环境变量，其次尝试项目旁的便携版默认位置
+const COMFY_DIR = process.env.COMFY_DIR || path.resolve(PROJECT_ROOT, "..", "ComfyUI_windows_portable", "ComfyUI");
+const MODELS_DIR = path.join(COMFY_DIR, "models");
+const WORKFLOWS_USER_DIR = path.join(COMFY_DIR, "user", "default", "workflows");
 try { fs.mkdirSync(VIDEO_OUT_DIR, { recursive: true }); } catch {}
 // 视频任务表：id -> { status, created, file, error, meta }
 const videoTasks = new Map();
@@ -316,7 +343,20 @@ async function handleGeneration(req, res, isEdit) {
     if (!prompt.trim()) return json(res, 400, { error: { message: "缺少 prompt" } });
     const n = Math.max(1, Math.min(8, Number(body.n) || 1));
     const { width, height } = parseSize(body.size);
-    console.log(`${isEdit ? "图生图" : "文生图"} prompt="${prompt.slice(0, 60)}" size=${width}x${height} n=${n}`);
+    // 文生图模型路由：body.model 可指定额外模型（MOSS / Z-Image / Krea2），默认 Qwen
+    const requestedModel = String(body.model || MODEL_ID);
+    const extraModel = !isEdit && EXTRA_IMAGE_MODELS[requestedModel] ? EXTRA_IMAGE_MODELS[requestedModel] : null;
+    console.log(`${isEdit ? "图生图" : "文生图"} model=${requestedModel} prompt="${prompt.slice(0, 60)}" size=${width}x${height} n=${n}`);
+    // 额外模型：先做就绪校验，未装好模型时给出清晰提示（而不是让 ComfyUI 报晦涩的 file not found）
+    if (extraModel) {
+      const registry = readRegistry();
+      const wfCfg = (registry.workflows || []).find((w) => w.id === extraModel.registryId) || {};
+      const missing = (wfCfg.models || []).filter((m) => !isModelInstalled(m.file, m.sizeBytes).installed).map((m) => m.file);
+      if (!fs.existsSync(extraModel.workflow)) missing.push(`工作流 ${path.basename(extraModel.workflow)}`);
+      if (missing.length) {
+        return json(res, 400, { error: { message: `${extraModel.display} 尚未安装完成，缺少：${missing.join("、")}。请到「工作流」面板下载安装。` } });
+      }
+    }
 
     // 判断是否为「遮罩局部重绘」：画布发 2 张图（原图 + 蓝色标注叠加图）且提示词含修改要求模板
     const isMaskEdit = isEdit && referenceImages.length >= 2 &&
@@ -346,6 +386,27 @@ async function handleGeneration(req, res, isEdit) {
 
     const allImages = [];
     for (let i = 0; i < n; i++) {
+      /* ---------- 额外文生图模型（MOSS / Z-Image / Krea2）：扁平 API 工作流 ---------- */
+      if (extraModel) {
+        const wf = loadWorkflow(extraModel.workflow);
+        // 这些工作流统一用 id "4" 的 CLIPTextEncode 注入正向提示词
+        if (wf["4"] && wf["4"].class_type === "CLIPTextEncode") wf["4"].inputs.text = prompt;
+        // latent 节点：EmptyFlux2LatentImage / EmptySD3LatentImage / EmptyLatentImage
+        for (const key of ["6"]) {
+          if (wf[key] && wf[key].inputs && "width" in wf[key].inputs) {
+            wf[key].inputs.width = width;
+            wf[key].inputs.height = height;
+          }
+        }
+        // 随机种子：KSampler 的 seed（id "7"）
+        if (wf["7"] && wf["7"].class_type === "KSampler") {
+          wf["7"].inputs.seed = Math.floor(Math.random() * 4294967295);
+        }
+        const imgs = await runWorkflow(wf);
+        allImages.push(...imgs);
+        continue;
+      }
+
       /* ---------- 遮罩局部重绘：真 inpaint 链路 ---------- */
       if (isMaskEdit) {
         const wf = loadWorkflow(INPAINT_WORKFLOW);
@@ -724,6 +785,270 @@ function parseMultipart(buf, boundary) {
   return { fields, files };
 }
 
+/* ----------------------------- 工作流与模型管理（画布「工作流」Tab） ----------------------------- */
+// 当前下载任务：file -> { status, downloaded, total, percentage, speed, error, startedAt }
+const downloadTasks = new Map();
+let latestDownloadFile = null;
+const MS_BASE = "https://www.modelscope.cn/models";
+
+function readRegistry() {
+  try {
+    return JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf8"));
+  } catch (e) {
+    console.error("[工作流] 读取注册表失败:", e.message);
+    return { workflows: [] };
+  }
+}
+
+/** 检查单个模型文件是否已在本地（兼容子目录，如 Qwen-功能2.1\xxx）
+ *  expectedSize>0 时会做完整性校验：文件存在但明显小于预期 → 判定为半成品(partial)，可被断点续传。 */
+function isModelInstalled(relFile, expectedSize) {
+  const inspect = (p, extra) => {
+    const size = fs.statSync(p).size;
+    if (size <= 1024) return null;
+    // 只对提供了预期大小的可扩展工作流做完整性校验，避免误伤已有工作流
+    if (expectedSize && size < expectedSize * 0.98) {
+      return { installed: false, localSize: size, partial: true, ...extra };
+    }
+    return { installed: true, localSize: size, ...extra };
+  };
+  const direct = path.join(MODELS_DIR, relFile);
+  try { if (fs.existsSync(direct)) { const r = inspect(direct, {}); if (r) return r; } } catch {}
+  // 递归在模型根目录下按文件名查找（部分用户把模型放进子文件夹）
+  const base = path.basename(relFile);
+  try {
+    const found = findFileByName(MODELS_DIR, base, 3);
+    if (found) { const r = inspect(found, { localPath: found }); if (r) return r; }
+  } catch {}
+  return { installed: false, localSize: 0 };
+}
+
+function findFileByName(dir, name, depth) {
+  if (depth < 0 || !fs.existsSync(dir)) return null;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  for (const e of entries) {
+    if (e.isFile() && e.name === name) return path.join(dir, e.name);
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      const r = findFileByName(path.join(dir, e.name), name, depth - 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+/** GET /v1/workflows —— 列出工作流，并标注每个模型的本地安装状态 */
+function handleWorkflowsList(res) {
+  const registry = readRegistry();
+  const comfyDirValid = fs.existsSync(MODELS_DIR);
+  const workflows = (registry.workflows || []).map((wf) => {
+    const models = (wf.models || []).map((m) => ({ ...m, ...isModelInstalled(m.file, m.sizeBytes) }));
+    const installedCount = models.filter((m) => m.installed).length;
+    return {
+      ...wf,
+      models,
+      installedCount,
+      totalCount: models.length,
+      allInstalled: installedCount === models.length && models.length > 0,
+      workflowInstalled: wf.workflowFile ? fs.existsSync(path.join(__dirname, wf.workflowFile)) : wf.status === "existing",
+    };
+  });
+  return json(res, 200, { workflows, comfyDir: COMFY_DIR, comfyDirValid });
+}
+
+/**
+ * 列出全部「图片」模型（含就绪状态）。
+ * 每个额外模型就绪条件：API 工作流文件存在 + 注册表模型全部安装。
+ * 就绪的才会进入 /v1/models 下拉；未就绪的仍带 missing 信息，方便前端提示。
+ */
+function listImageModels() {
+  const registry = readRegistry();
+  const byId = {};
+  for (const wf of registry.workflows || []) byId[wf.id] = wf;
+
+  const models = [
+    {
+      id: MODEL_ID,
+      display_name: "Qwen Image 2.1（本地）",
+      ready: true,
+      builtin: true,
+    },
+  ];
+  for (const [id, cfg] of Object.entries(EXTRA_IMAGE_MODELS)) {
+    const wf = byId[cfg.registryId] || {};
+    const missing = [];
+    for (const m of wf.models || []) {
+      const st = isModelInstalled(m.file, m.sizeBytes);
+      if (!st.installed) missing.push(m.file);
+    }
+    const apiWorkflowExists = fs.existsSync(cfg.workflow);
+    const ready = missing.length === 0 && apiWorkflowExists;
+    models.push({
+      id,
+      display_name: cfg.display,
+      display_name_en: cfg.displayEn,
+      ready,
+      missing,
+      workflowExists: apiWorkflowExists,
+    });
+  }
+  return models;
+}
+
+/** GET /v1/models/download/progress —— 返回全部下载任务的进度（支持并发）
+ *  响应: { tasks: { [file]: {status,file,downloaded,total,percentage,speed,error} }, latest: <file|null> } */
+function handleDownloadProgress(res) {
+  const tasks = {};
+  for (const [file, t] of downloadTasks) tasks[file] = t;
+  return json(res, 200, { tasks, latest: latestDownloadFile });
+}
+
+/** 下载单个模型（流式写入 + 断点续传 + 进度回调） */
+async function downloadModel(job) {
+  const { file, repo, remotePath } = job;
+  const dest = path.join(MODELS_DIR, file);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+
+  // 已完整下载则直接完成
+  let existing = 0;
+  try { if (fs.existsSync(dest)) existing = fs.statSync(dest).size; } catch {}
+  let total = job.sizeBytes || 0;
+  try {
+    const probe = await fetch(`${MS_BASE}/${repo}/resolve/master/${remotePath}`, { method: "HEAD", signal: AbortSignal.timeout(30000) });
+    if (probe.ok) total = Number(probe.headers.get("content-length") || 0) || total;
+  } catch { /* HEAD 失败则用注册表 sizeBytes 兜底，不阻断下载 */ }
+  if (existing > 0 && total > 0 && existing >= total) {
+    downloadTasks.set(file, { status: "done", file, downloaded: existing, total, percentage: 100, speed: 0, error: null });
+    return;
+  }
+
+  const headers = {};
+  if (existing > 0 && total > 0 && existing < total) headers.Range = `bytes=${existing}-`;
+  const response = await fetch(`${MS_BASE}/${repo}/resolve/master/${remotePath}`, { headers, signal: AbortSignal.timeout(600000) });
+  if (!response.ok && response.status !== 206) throw new Error(`ModelScope 返回 ${response.status}`);
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  const finalTotal = existing + contentLength || total;
+  downloadTasks.set(file, { status: "downloading", file, downloaded: existing, total: finalTotal, percentage: finalTotal ? Math.round((existing / finalTotal) * 100) : 0, speed: 0, error: null, startedAt: Date.now() });
+
+  const flag = { value: false };
+  downloadAborts.set(file, flag);
+  const writer = fs.createWriteStream(dest, { flags: existing > 0 ? "a" : "w" });
+  // 关键：writer 自身可能异步触发 error（尤其 destroy 后仍有 pending 写入），
+  // 必须挂监听器，否则未捕获的 error 事件会让整个网关进程崩溃。
+  writer.on("error", () => {});
+  const reader = response.body.getReader();
+  let downloaded = existing;
+  let lastBytes = existing;
+  let lastTime = Date.now();
+
+  try {
+    for (;;) {
+      if (flag.value) { try { await reader.cancel(); } catch {} throw new Error("__CANCELLED__"); }
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (flag.value || writer.destroyed) { try { await reader.cancel(); } catch {} throw new Error("__CANCELLED__"); }
+      writer.write(Buffer.from(value));
+      downloaded += value.length;
+      const now = Date.now();
+      const speed = now - lastTime >= 500 ? Math.round(((downloaded - lastBytes) / 1024 / 1024) / ((now - lastTime) / 1000) * 10) / 10 : undefined;
+      if (speed !== undefined) { lastBytes = downloaded; lastTime = now; }
+      downloadTasks.set(file, {
+        status: "downloading", file, downloaded, total: finalTotal,
+        percentage: finalTotal ? Math.min(100, Math.round((downloaded / finalTotal) * 100)) : 0,
+        speed: speed ?? (downloadTasks.get(file)?.speed || 0),
+        error: null, startedAt: downloadTasks.get(file)?.startedAt || Date.now(),
+      });
+    }
+    await new Promise((resolve) => {
+      if (writer.destroyed) return resolve();
+      writer.end(resolve);
+      setTimeout(resolve, 5000); // 兜底，避免 end 回调丢失导致挂起
+    });
+    downloadTasks.set(file, { status: "done", file, downloaded, total: finalTotal, percentage: 100, speed: 0, error: null });
+    console.log(`[下载] 完成: ${file}`);
+  } catch (e) {
+    writer.destroy();
+    if (e.message === "__CANCELLED__") {
+      downloadTasks.set(file, { status: "canceled", file, downloaded, total: finalTotal, percentage: finalTotal ? Math.round((downloaded / finalTotal) * 100) : 0, speed: 0, error: "已取消" });
+    } else {
+      downloadTasks.set(file, { status: "error", file, downloaded, total: finalTotal, percentage: 0, speed: 0, error: e.message });
+    }
+    throw e;
+  } finally {
+    downloadAborts.delete(file);
+  }
+}
+const downloadAborts = new Map();
+
+/** POST /v1/models/download —— 启动下载（异步），立即返回 */
+async function handleModelDownload(req, res) {
+  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const { file, repo, remotePath, sizeBytes } = body;
+  if (!file || !repo || !remotePath) return json(res, 400, { error: { message: "缺少 file/repo/remotePath" } });
+  // 防目录穿越：目标必须落在 MODELS_DIR 内
+  const dest = path.resolve(MODELS_DIR, file);
+  if (!dest.startsWith(path.resolve(MODELS_DIR))) return json(res, 400, { error: { message: "非法路径" } });
+
+  // 防重复：同一文件已在排队/下载中则不再启动，避免写坏同一文件
+  const prev = downloadTasks.get(file);
+  if (prev && (prev.status === "queued" || prev.status === "downloading")) {
+    return json(res, 200, { ok: false, file, reason: "already-running", message: "该文件正在下载中" });
+  }
+
+  latestDownloadFile = file;
+  downloadTasks.set(file, { status: "queued", file, downloaded: 0, total: sizeBytes || 0, percentage: 0, speed: 0, error: null, startedAt: Date.now() });
+  downloadModel({ file, repo, remotePath, sizeBytes }).catch((e) => {
+    if (e.message !== "__CANCELLED__") console.error("[下载] 失败:", file, e.message);
+  });
+  return json(res, 200, { ok: true, file });
+}
+
+/** POST /v1/models/download/cancel —— 取消指定文件下载；未指定 file 则取消全部 */
+async function handleDownloadCancel(req, res) {
+  let parsed = {};
+  try { parsed = JSON.parse((await readBody(req)).toString("utf8") || "{}"); } catch {}
+  const file = parsed.file;
+  if (file) {
+    const flag = downloadAborts.get(file);
+    if (flag) flag.value = true;
+    const t = downloadTasks.get(file);
+    if (t && (t.status === "queued" || t.status === "downloading")) {
+      downloadTasks.set(file, { ...t, status: "canceled", error: "已取消", speed: 0 });
+    }
+    return json(res, 200, { ok: true, file });
+  }
+  // 未指定则取消全部
+  let count = 0;
+  for (const [, flag] of downloadAborts) { flag.value = true; count++; }
+  for (const [f, t] of downloadTasks) {
+    if (t.status === "queued" || t.status === "downloading") downloadTasks.set(f, { ...t, status: "canceled", error: "已取消", speed: 0 });
+  }
+  return json(res, 200, { ok: true, canceled: count });
+}
+
+/** POST /v1/workflows/install —— 下载官方工作流 JSON 到 ComfyUI 与网关目录 */
+async function handleWorkflowInstall(req, res) {
+  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const { workflowUrl, workflowFile } = body;
+  if (!workflowUrl || !workflowFile || !/^[\w.-]+\.json$/.test(workflowFile)) {
+    return json(res, 400, { error: { message: "参数无效" } });
+  }
+  try {
+    const r = await fetch(workflowUrl, { signal: AbortSignal.timeout(60000) });
+    if (!r.ok) throw new Error(`下载工作流失败 ${r.status}`);
+    const text = await r.text();
+    JSON.parse(text); // 校验是合法 JSON
+    // 保存到 ComfyUI 用户工作流目录（UI 可导入）与网关目录（备份）
+    try { fs.mkdirSync(WORKFLOWS_USER_DIR, { recursive: true }); fs.writeFileSync(path.join(WORKFLOWS_USER_DIR, workflowFile), text); } catch {}
+    fs.writeFileSync(path.join(__dirname, workflowFile), text);
+    return json(res, 200, { ok: true, file: workflowFile });
+  } catch (e) {
+    return json(res, 500, { error: { message: e.message } });
+  }
+}
+
 /* ----------------------------- 系统资源监控 ----------------------------- */
 /** GET /system/stats —— 转发 ComfyUI 系统状态，给画布顶栏显示内存/显存占用 */
 async function handleSystemStats(res) {
@@ -789,16 +1114,24 @@ const server = http.createServer(async (req, res) => {
       return handleProgress(res);
     }
     if (req.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
-      return json(res, 200, {
-        object: "list",
-        data: [
-          { id: MODEL_ID, object: "model", owned_by: "local-comfyui", display_name: "Qwen Image 2.1（本地）" },
-          { id: VIDEO_MODEL_ID, object: "model", owned_by: "local-comfyui", display_name: "MiniMax H3 视频（本地）" },
-        ],
-      });
+      const imageModels = listImageModels();
+      const data = [];
+      for (const m of imageModels) {
+        data.push({ id: m.id, object: "model", owned_by: "local-comfyui", display_name: m.display_name, ready: m.ready, ...(m.missing?.length ? { missing: m.missing } : {}) });
+      }
+      data.push({ id: VIDEO_MODEL_ID, object: "model", owned_by: "local-comfyui", display_name: "MiniMax H3 视频（本地）", ready: true });
+      return json(res, 200, { object: "list", data });
     }
     if (url.pathname === "/health" || url.pathname === "/") {
-      return json(res, 200, { status: "ok", comfy: COMFY, model: MODEL_ID, videoModel: VIDEO_MODEL_ID, tasks: videoTasks.size });
+      const imageModels = listImageModels();
+      return json(res, 200, {
+        status: "ok",
+        comfy: COMFY,
+        model: MODEL_ID,
+        videoModel: VIDEO_MODEL_ID,
+        imageModels: imageModels.map((m) => ({ id: m.id, display_name: m.display_name, ready: m.ready })),
+        tasks: videoTasks.size,
+      });
     }
     // 系统资源监控（画布顶栏显示）
     if (req.method === "GET" && url.pathname === "/system/stats") {
@@ -813,6 +1146,22 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/changelog") {
       return textFile(res, CHANGELOG_FILE);
+    }
+    // 工作流与模型管理（画布「工作流」Tab）
+    if (req.method === "GET" && url.pathname === "/v1/workflows") {
+      return handleWorkflowsList(res);
+    }
+    if (req.method === "GET" && url.pathname === "/v1/models/download/progress") {
+      return handleDownloadProgress(res);
+    }
+    if (req.method === "POST" && url.pathname === "/v1/models/download") {
+      return await handleModelDownload(req, res);
+    }
+    if (req.method === "POST" && url.pathname === "/v1/models/download/cancel") {
+      return await handleDownloadCancel(req, res);
+    }
+    if (req.method === "POST" && url.pathname === "/v1/workflows/install") {
+      return await handleWorkflowInstall(req, res);
     }
     if (req.method === "POST" && url.pathname === "/v1/images/generations") {
       return await handleGeneration(req, res, false);
