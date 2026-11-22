@@ -15,6 +15,7 @@ gateway/video-outputs/
 *.mp4
 # VERSION.bak / CHANGELOG.md.bak 等备份
 *.bak
+*.bak-*
 
 # ---- 环境 / 日志 / 缓存 ----
 .env*

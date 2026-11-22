@@ -29,6 +29,7 @@ const MODEL_ID = "image-qwen21";
 const VIDEO_MODEL_ID = "video-minimax-h3";
 const T2I_WORKFLOW = path.join(__dirname, "qwen-t2i.json");
 const EDIT_WORKFLOW = path.join(__dirname, "qwen-edit.json");
+const INPAINT_WORKFLOW = path.join(__dirname, "qwen-inpaint.json");
 const VIDEO_WORKFLOW = path.join(__dirname, "h3-t2v.json");
 const VIDEO_OUT_DIR = path.join(__dirname, "video-outputs");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -102,6 +103,46 @@ function parseSize(size) {
   return { width: Math.max(64, +m[1]), height: Math.max(64, +m[2]) };
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+/** 从 PNG/JPEG/WebP 的 base64 中读取像素尺寸（零依赖，解析文件头） */
+function imageSizeFromBase64(base64) {
+  try {
+    const buf = Buffer.from(base64, "base64");
+    // PNG: 宽高在字节 16/20（IHDR）
+    if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    }
+    // JPEG: 扫描 SOF0/SOF2 标记
+    if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+      let p = 2;
+      while (p < buf.length - 9) {
+        if (buf[p] !== 0xff) { p++; continue; }
+        const m = buf[p + 1];
+        if (m === 0xc0 || m === 0xc1 || m === 0xc2 || m === 0xc3) {
+          return { height: buf.readUInt16BE(p + 5), width: buf.readUInt16BE(p + 7) };
+        }
+        if (m === 0xd8 || m === 0xd9 || (m >= 0xd0 && m <= 0xd7)) { p += 2; continue; }
+        const len = buf.readUInt16BE(p + 2);
+        p += 2 + len;
+      }
+    }
+    // WebP VP8X / VP8 / VP8L
+    if (buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") {
+      const fmt = buf.toString("ascii", 12, 16);
+      if (fmt === "VP8X") {
+        return { width: 1 + buf.readUIntLE(24, 3), height: 1 + buf.readUIntLE(27, 3) };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** 画布发来的遮罩提示词是长模板句，提取「修改要求：」之后的真实指令 */
+function extractEditInstruction(prompt) {
+  const s = String(prompt || "");
+  const m = /修改要求[:：]\s*(.+)$/s.exec(s) || /Edit request[:：]\s*(.+)$/s.exec(s);
+  return m && m[1].trim() ? m[1].trim() : s;
+}
 
 /** 把参考图上传到 ComfyUI，返回可用于 LoadImage 的文件名 */
 async function uploadReference(base64Data, filename = "reference.png") {
@@ -183,7 +224,7 @@ async function handleGeneration(req, res, isEdit) {
   try {
     const raw = await readBody(req);
     let body = {};
-    let referenceImage = null;
+    const referenceImages = []; // 支持多张：image[] = [原图, mask, ...]
 
     if (isEdit && req.headers["content-type"]?.includes("multipart/form-data")) {
       // 图生图： multipart（画布 /v1/images/edits 标准格式）
@@ -192,8 +233,9 @@ async function handleGeneration(req, res, isEdit) {
       const b = boundary[1] || boundary[2];
       const parts = parseMultipart(raw, b);
       body = parts.fields || {};
-      const imageField = parts.files?.image?.[0] || parts.files?.images?.[0];
-      if (imageField) referenceImage = imageField.data.toString("base64");
+      // 画布发字段名 image[]（多图）或 image / images（单图），全部兼容
+      const fileGroups = [parts.files?.["image[]"], parts.files?.image, parts.files?.images].filter(Boolean);
+      for (const group of fileGroups) for (const f of group) referenceImages.push(f.data.toString("base64"));
     } else {
       body = JSON.parse(raw.toString("utf8") || "{}");
     }
@@ -204,14 +246,54 @@ async function handleGeneration(req, res, isEdit) {
     const { width, height } = parseSize(body.size);
     console.log(`${isEdit ? "图生图" : "文生图"} prompt="${prompt.slice(0, 60)}" size=${width}x${height} n=${n}`);
 
-    // 图生图：先把参考图上传到 ComfyUI，供 LoadImage 节点使用
-    let refName = null;
-    if (isEdit && referenceImage) {
-      refName = await uploadReference(referenceImage, `ref_${Date.now()}.png`);
+    // 判断是否为「遮罩局部重绘」：画布发 2 张图（原图 + 蓝色标注叠加图）且提示词含修改要求模板
+    const isMaskEdit = isEdit && referenceImages.length >= 2 &&
+      /修改要求[:：]|Edit request[:：]/i.test(prompt);
+    console.log(`  模式=${isMaskEdit ? "遮罩局部重绘(inpaint)" : isEdit ? "普通图生图" : "文生图"}`);
+    if (isMaskEdit) console.log(`  修改指令="${extractEditInstruction(prompt)}"`);
+
+    // 把所有参考图上传到 ComfyUI（第 1 张原图，第 2 张遮罩叠加图）
+    const refNames = [];
+    if (isEdit) {
+      for (let k = 0; k < referenceImages.length; k++) {
+        refNames.push(await uploadReference(referenceImages[k], `ref_${Date.now()}_${k}.png`));
+      }
+      console.log(`  已接收 ${referenceImages.length} 张参考图${referenceImages.length > 1 ? "（原图 + 遮罩）" : ""}`);
+    }
+
+    // 遮罩局部重绘时，用原图真实尺寸作为 latent 尺寸（保证遮罩与画面像素对齐）
+    let mw = width, mh = height;
+    if (isMaskEdit) {
+      const sz = imageSizeFromBase64(referenceImages[0]);
+      if (sz) {
+        mw = Math.max(64, Math.round(sz.width / 32) * 32);
+        mh = Math.max(64, Math.round(sz.height / 32) * 32);
+        console.log(`  原图尺寸 ${sz.width}x${sz.height} -> latent ${mw}x${mh}`);
+      }
     }
 
     const allImages = [];
     for (let i = 0; i < n; i++) {
+      /* ---------- 遮罩局部重绘：真 inpaint 链路 ---------- */
+      if (isMaskEdit) {
+        const wf = loadWorkflow(INPAINT_WORKFLOW);
+        const encId = findNode(wf, "TextEncodeQwenImage21GH");
+        // 接线：原图 -> 9100，遮罩叠加图 -> 9101（差异节点自动提取遮罩）
+        wf["9100"].inputs.image = refNames[0];
+        wf["9101"].inputs.image = refNames[1];
+        wf[encId].inputs.prompt = extractEditInstruction(prompt);
+        wf[encId].inputs.latent_width = mw;
+        wf[encId].inputs.latent_height = mh;
+        const noiseId = findNode(wf, "RandomNoise");
+        if (noiseId) wf[noiseId].inputs.noise_seed = Math.floor(Math.random() * 4294967295);
+        // 一致性 LoRA 若缺失则自动移除（UNET 直连）
+        removeLoraIfMissing(wf);
+        const imgs = await runWorkflow(wf);
+        allImages.push(...imgs);
+        continue;
+      }
+
+      /* ---------- 普通图生图 / 文生图（原逻辑） ---------- */
       const wf = loadWorkflow(isEdit ? EDIT_WORKFLOW : T2I_WORKFLOW);
       const encId = findNode(wf, "TextEncodeQwenImage21");
       const latentId = findNode(wf, "EmptyLatentImage");
@@ -223,15 +305,16 @@ async function handleGeneration(req, res, isEdit) {
         wf[latentId].inputs.height = height;
       }
       if (noiseId) wf[noiseId].inputs.noise_seed = Math.floor(Math.random() * 4294967295);
-      // 图生图：插入 LoadImage 节点，把参考图接到 Qwen 编码器的 images 输入
-      if (isEdit && refName) {
-        const loadId = "9100";
-        wf[loadId] = { class_type: "LoadImage", inputs: { image: refName } };
-        wf[encId].inputs.images = { image_1: [loadId, 0] };
-        // latent 来自编码器第 3 个输出（已含参考图），EmptyLatentImage 不再需要
+      if (isEdit && refNames.length) {
+        const imagesInput = {};
+        refNames.forEach((name, idx) => {
+          const loadId = String(9100 + idx);
+          wf[loadId] = { class_type: "LoadImage", inputs: { image: name } };
+          imagesInput[`image_${idx + 1}`] = [loadId, 0];
+        });
+        wf[encId].inputs.images = imagesInput;
         if (latentId) delete wf[latentId];
       }
-      // 图生图：无一致性 LoRA 时移除 LoRA 节点（把 UNET 直连下游）
       if (isEdit) removeLoraIfMissing(wf);
       const imgs = await runWorkflow(wf);
       allImages.push(...imgs);
