@@ -818,6 +818,37 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 }
 
+/** 扩图：向本地网关 /images/outpaint 提交源图 + 左右上下扩展像素 */
+export async function requestOutpaint(
+    config: AiConfig,
+    reference: ReferenceImage,
+    params: { left: number; right: number; top: number; bottom: number; prompt?: string },
+    options?: RequestOptions,
+) {
+    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const formData = new FormData();
+    formData.set("model", requestConfig.model);
+    formData.set("left", String(params.left));
+    formData.set("right", String(params.right));
+    formData.set("top", String(params.top));
+    formData.set("bottom", String(params.bottom));
+    formData.set("unit", "像素");
+    formData.set("prompt", withSystemPrompt(requestConfig, params.prompt || ""));
+    formData.set("response_format", "b64_json");
+    const file = await dataUrlToFile({ ...reference, dataUrl: await imageToDataUrl(reference) });
+    formData.append("image", file);
+    try {
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/outpaint"), formData, {
+            headers: aiHeaders(requestConfig),
+            signal: options?.signal,
+            timeout: IMAGE_REQUEST_TIMEOUT_MS,
+        });
+        return await parseImagePayload(response.data);
+    } catch (error) {
+        throw new Error(readAxiosError(error, apiText("requestFailed")));
+    }
+}
+
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.textModel);
     const script = resolveModelScript(config, config.model || config.textModel);

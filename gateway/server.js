@@ -6,6 +6,7 @@
  *   GET  /v1/models                    模型列表（图片 + 视频）
  *   POST /v1/images/generations        文生图（Qwen Image 2.1 t2i）
  *   POST /v1/images/edits              图生图/参考图编辑（Qwen Image 2.1 edit）
+ *   POST /v1/images/outpaint           扩图（Qwen Image 2.1 外补画板，左右上下扩展）
  *   POST /v1/videos                    文生视频（MiniMax H3）-- 异步提交
  *   GET  /v1/videos/{id}               查询视频任务状态
  *   GET  /v1/videos/{id}/content       下载生成的 MP4
@@ -30,6 +31,7 @@ const VIDEO_MODEL_ID = "video-minimax-h3";
 const T2I_WORKFLOW = path.join(__dirname, "qwen-t2i.json");
 const EDIT_WORKFLOW = path.join(__dirname, "qwen-edit.json");
 const INPAINT_WORKFLOW = path.join(__dirname, "qwen-inpaint.json");
+const OUTPAINT_WORKFLOW = path.join(__dirname, "qwen-outpaint.json");
 const VIDEO_WORKFLOW = path.join(__dirname, "h3-t2v.json");
 const VIDEO_OUT_DIR = path.join(__dirname, "video-outputs");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -333,6 +335,83 @@ async function handleGeneration(req, res, isEdit) {
   }
 }
 
+/* ----------------------------- 扩图：Qwen Image 2.1 外补画板 ----------------------------- */
+
+/**
+ * POST /v1/images/outpaint — 扩图
+ * 接受 multipart（字段 image / image[]）或 JSON（字段 image 为 base64/dataURL）
+ * 参数：
+ *   left/right/top/bottom  扩展像素（默认 256/256/0/0）
+ *   unit                   "像素" | "百分比"（默认像素）
+ *   prompt                 可选：对扩展区域的额外描述
+ *   response_format        b64_json（默认）| url
+ */
+async function handleOutpaint(req, res) {
+  try {
+    const raw = await readBody(req);
+    let body = {};
+    let sourceBase64 = null;
+    if (req.headers["content-type"]?.includes("multipart/form-data")) {
+      const boundary = /boundary=(?:"([^"]+)"|([^;]+))/.exec(req.headers["content-type"]);
+      if (!boundary) return json(res, 400, { error: { message: "缺少 multipart boundary" } });
+      const parts = parseMultipart(raw, boundary[1] || boundary[2]);
+      body = parts.fields || {};
+      const files = parts.files?.["image[]"] || parts.files?.image || parts.files?.images || [];
+      if (files.length) sourceBase64 = files[0].data.toString("base64");
+    } else {
+      body = JSON.parse(raw.toString("utf8") || "{}");
+      if (body.image) {
+        sourceBase64 = String(body.image).replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, "");
+      }
+    }
+    if (!sourceBase64) return json(res, 400, { error: { message: "缺少输入图片（image）" } });
+
+    const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+    const left = Math.max(0, Math.round(num(body.left, 256)));
+    const right = Math.max(0, Math.round(num(body.right, 256)));
+    const top = Math.max(0, Math.round(num(body.top, 0)));
+    const bottom = Math.max(0, Math.round(num(body.bottom, 0)));
+    const unit = body.unit === "百分比" || body.unit === "percent" ? "百分比" : "像素";
+    const userPrompt = String(body.prompt || "").trim();
+    const n = Math.max(1, Math.min(4, num(body.n, 1)));
+    console.log(`扩图 扩展=${unit === "像素" ? `${left}/${right}/${top}/${bottom}px` : `${left}/${right}/${top}/${bottom}%`} n=${n} prompt="${userPrompt.slice(0, 40)}"`);
+
+    const srcName = await uploadReference(sourceBase64, `outpaint_src_${Date.now()}.png`);
+
+    const allImages = [];
+    for (let i = 0; i < n; i++) {
+      const wf = loadWorkflow(OUTPAINT_WORKFLOW);
+      wf["9100"].inputs.image = srcName;
+      wf["4800"].inputs["单位"] = unit;
+      wf["4800"].inputs["左"] = left;
+      wf["4800"].inputs["右"] = right;
+      wf["4800"].inputs["上"] = top;
+      wf["4800"].inputs["下"] = bottom;
+      const encId = findNode(wf, "TextEncodeQwenImage21GH");
+      if (encId) {
+        wf[encId].inputs.prompt = userPrompt
+          ? `移除图像中的灰色区域，无缝自然延展为完整图像。${userPrompt}`
+          : "移除图像中的灰色区域，无缝自然延展为完整图像。";
+      }
+      const noiseId = findNode(wf, "RandomNoise");
+      if (noiseId) wf[noiseId].inputs.noise_seed = Math.floor(Math.random() * 4294967295);
+      removeLoraIfMissing(wf);
+      const imgs = await runWorkflow(wf);
+      allImages.push(...imgs);
+    }
+
+    const fmt = body.response_format || "b64_json";
+    if (fmt === "url") {
+      json(res, 200, { created: Math.floor(Date.now() / 1000), data: allImages.map((b) => ({ url: `data:image/png;base64,${b}` })) });
+    } else {
+      json(res, 200, { created: Math.floor(Date.now() / 1000), data: allImages.map((b) => ({ b64_json: b })) });
+    }
+  } catch (e) {
+    console.error("扩图错误:", e.message);
+    json(res, 500, { error: { message: e.message, type: "server_error" } });
+  }
+}
+
 /* ----------------------------- 视频：MiniMax H3 ----------------------------- */
 
 /** 从画布尺寸/参数推导 H3 的宽高帧数。8GB 显存默认 864x480 / 60帧(2.5秒)。宽高需 32 的倍数，帧数需 17n+5 */
@@ -517,7 +596,7 @@ function removeLoraIfMissing(wf) {
   const lorasDir = process.env.LORAS_DIR || "D:/ComfyUI-Easy/ComfyUI_windows_portable/ComfyUI/models/loras";
   const exists = findFileRecursive(lorasDir, path.basename(loraName));
   if (exists) return; // 有 LoRA，保留
-  console.log(`  一致性 LoRA 缺失 (${path.basename(loraName)})，跳过该节点`);
+  console.log(`  LoRA 缺失 (${path.basename(loraName)})，跳过该节点`);
   const modelInput = loraNode.inputs.model; // 如 ["460", 0]
   // 找谁把输出连到了这个 LoRA 节点，把那里改成直连下游
   for (const [k, v] of Object.entries(wf)) {
@@ -666,6 +745,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/v1/images/edits") {
       return await handleGeneration(req, res, true);
+    }
+    if (req.method === "POST" && url.pathname === "/v1/images/outpaint") {
+      return await handleOutpaint(req, res);
     }
     // 视频：提交
     if (req.method === "POST" && url.pathname === "/v1/videos") {

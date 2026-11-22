@@ -1,0 +1,218 @@
+{
+  "452": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    }
+  },
+  "453": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    }
+  },
+  "460": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "459": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["460", 0],
+      "lora_name": "Qwen2.1_扩图_GH_3750.safetensors",
+      "strength_model": 0.7
+    },
+    "_meta": { "title": "扩图 LoRA 0.7" }
+  },
+  "446": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "model": ["459", 0],
+      "device": "auto",
+      "dtype": "default"
+    }
+  },
+  "9100": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__SOURCE_IMAGE__"
+    },
+    "_meta": { "title": "待扩图原图" }
+  },
+  "4800": {
+    "class_type": "孤海外补画板可视化",
+    "inputs": {
+      "图像": ["9100", 0],
+      "单位": "像素",
+      "左": 256,
+      "右": 256,
+      "上": 0,
+      "下": 0,
+      "最大输出长边": 2048,
+      "整除数": 32,
+      "外补颜色": "#808080"
+    },
+    "_meta": { "title": "外补画板：设置左右上下扩展像素" }
+  },
+  "4000": {
+    "class_type": "孤海遮罩分析",
+    "inputs": {
+      "遮罩": ["4800", 1],
+      "上扩百分比": 0,
+      "下扩百分比": 0,
+      "左扩百分比": 0,
+      "右扩百分比": 0
+    },
+    "_meta": { "title": "分析外补遮罩区域" }
+  },
+  "3900": {
+    "class_type": "数学运算_孤海",
+    "inputs": {
+      "值1": "1.0 if b==d else (2/3*(b-d))/min(c,d)+1.0",
+      "值2": "1.0 if a==c else (2/3*(a-c))/min(c,d)+1.0",
+      "a": ["4000", 1],
+      "b": ["4000", 2],
+      "c": ["4000", 3],
+      "d": ["4000", 4]
+    },
+    "_meta": { "title": "根据扩展区域算裁剪放大系数" }
+  },
+  "2400": {
+    "class_type": "GH_MaskCropV2",
+    "inputs": {
+      "图像": ["4800", 0],
+      "遮罩": ["4800", 1],
+      "遮罩填充": false,
+      "扩展系数上": ["3900", 1],
+      "扩展系数下": ["3900", 1],
+      "扩展系数左": ["3900", 3],
+      "扩展系数右": ["3900", 3],
+      "输出尺寸": "原像素",
+      "自定义宽": 1024,
+      "自定义高": 1024,
+      "倍数取整": 8
+    },
+    "_meta": { "title": "裁剪外补区域" }
+  },
+  "3000": {
+    "class_type": "长边短边",
+    "inputs": {
+      "图像": ["2400", 1]
+    }
+  },
+  "2700": {
+    "class_type": "GoohaiUniversalSlider",
+    "inputs": {
+      "值": 2048
+    }
+  },
+  "2800": {
+    "class_type": "数学运算_孤海",
+    "inputs": {
+      "值1": "min(max(1024,b),a)",
+      "值2": "",
+      "a": ["2700", 0],
+      "b": ["3000", 0]
+    },
+    "_meta": { "title": "计算缩放长边" }
+  },
+  "500": {
+    "class_type": "图像缩放V2_孤海",
+    "inputs": {
+      "宽度": 512,
+      "高度": 512,
+      "缩放方法": "按长边等比例",
+      "将边缩放到": ["2800", 0],
+      "缩放插值": "Lanczos",
+      "缩放模式": "拉伸",
+      "固定方向": "居中",
+      "执行条件": "总是",
+      "填充颜色": "#808080",
+      "整除数": 32,
+      "图像": ["2400", 1]
+    },
+    "_meta": { "title": "缩放到生成尺寸" }
+  },
+  "430": {
+    "class_type": "TextEncodeQwenImage21GH",
+    "inputs": {
+      "clip": ["452", 0],
+      "vae": ["453", 0],
+      "image_01": ["500", 0],
+      "prompt": "移除图像中的灰色区域，无缝自然延展为完整图像。__USER_PROMPT__",
+      "negative_prompt": "",
+      "latent_width": ["500", 1],
+      "latent_height": ["500", 2],
+      "mode": "填充",
+      "ref_image_size": "自动"
+    },
+    "_meta": { "title": "Qwen2.1 编码（扩图）" }
+  },
+  "450": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": ["446", 0],
+      "positive": ["430", 0],
+      "negative": ["430", 1],
+      "cfg": 1
+    }
+  },
+  "443": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "456": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 123456789
+    }
+  },
+  "467": {
+    "class_type": "ManualSigmas",
+    "inputs": {
+      "sigmas": "1.0, 0.978453, 0.954180, 0.926626, 0.895080, 0.845148, 0.704534, 0.414568, 0.150000, 0"
+    }
+  },
+  "444": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": ["456", 0],
+      "guider": ["450", 0],
+      "sampler": ["443", 0],
+      "sigmas": ["467", 0],
+      "latent_image": ["430", 2]
+    }
+  },
+  "429": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["444", 0],
+      "vae": ["453", 0]
+    }
+  },
+  "2500": {
+    "class_type": "GH_CropRestore",
+    "inputs": {
+      "接缝": ["2400", 0],
+      "裁剪图像": ["429", 0],
+      "遮罩扩展百分比": 3,
+      "遮罩羽化百分比": 3,
+      "颜色还原强度": 1
+    },
+    "_meta": { "title": "缝合回原图" }
+  },
+  "422": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["2500", 0],
+      "filename_prefix": "QW21-OUTPAINT-%date:yyyyMMddhhmmss%"
+    }
+  }
+}

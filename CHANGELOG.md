@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.22.0 - 2026-11-22
+
++ [新增] 扩图功能：图片节点工具栏加「扩图」按钮，可设左右上下扩展像素，AI 自然补全新增区域（外补画板 + 扩图 LoRA），原图区域完整保留。
++ [修复] 遮罩局部重绘真正生效：改用差异遮罩提取 + Qwen21GH 编码器 mask 口 + 一致性 LoRA，只改遮罩区，人物不再全变。
++ [新增] Goohai 工具箱 Python 依赖（opencv/scikit-image/matplotlib/mediapipe/dlib），98 个节点全部可加载。
+
 ## v0.21.0 - 2026-11-22
 
 + [新增] 本地极简网关（gateway/server.js）：对接 ComfyUI，提供 OpenAI 兼容的文生图、图生图和文生视频接口。
