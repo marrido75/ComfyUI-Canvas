@@ -29,3 +29,6 @@ data/
 web/public/plugins
 plugins/canvas/*/dist
 plugins/canvas/*/node_modules
+
+# ---- 上游 CI/CD 工作流（本地桌面项目用不到，且 PAT 无 workflow 权限）----
+.github/workflows/
