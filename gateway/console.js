@@ -133,6 +133,8 @@ function formatLog(id, level, text, time) {
 function logLine(id, level, text) {
   const clean = text.replace(/\x1b\[[0-9;]*m/g, "").trimEnd();
   if (!clean) return;
+  // 用户只看画布地址：屏蔽 8188 / 8190 的 URL 提示行
+  if (/https?:\/\/127\.0\.0\.1:(8188|8190)\b/.test(clean)) return;
   const time = now();
   history[id].push({ level, text: clean, time });
   if (history[id].length > MAX_HISTORY) {
@@ -246,7 +248,7 @@ async function startService(id) {
     st.external = true;
     st.child = null;
     st.pid = null;
-    write(`${C.dim}  ↳ ${svc.name} 端口 ${svc.port} 已在运行，直接复用${C.reset}\n`);
+    write(`${C.dim}  ↳ ${svc.name} 已在运行，直接复用${C.reset}\n`);
     return;
   }
 
@@ -308,7 +310,7 @@ async function waitAll(ids) {
       if (ok) {
         state[id].status = "running";
         state[id].since = Date.now();
-        logLine(id, "out", `已就绪 → http://127.0.0.1:${SERVICES[id].port}`);
+        logLine(id, "out", id === "comfy" ? "启动成功" : "已就绪");
       } else if (state[id].status === "starting") {
         state[id].status = "failed";
         logLine(id, "err", `等待端口 ${SERVICES[id].port} 就绪超时，请检查上方日志`);
@@ -419,12 +421,10 @@ await waitAll(IDS);
 
 const failed = IDS.filter((id) => state[id].status === "failed");
 if (failed.length === 0) {
-  write(`\n${C.ok}${C.title}全部就绪！${C.reset}\n`);
+  write(`\n${C.ok}${C.title}全部就绪！ComfyUI 启动成功${C.reset}\n`);
 } else {
   write(`\n${C.err}以下服务启动失败: ${failed.map((id) => SERVICES[id].name).join(" / ")}${C.reset}\n`);
 }
-write(`  ${C.dim}画布${C.reset} http://127.0.0.1:${CANVAS_PORT}\n`);
-write(`  ${C.dim}网关${C.reset} http://127.0.0.1:8190\n`);
-write(`  ${C.dim}ComfyUI${C.reset} http://127.0.0.1:8188\n\n`);
+write(`\n  ${C.dim}画布地址${C.reset} ${C.ok}http://127.0.0.1:${CANVAS_PORT}/${C.reset}\n\n`);
 
 if (!NO_BROWSER) openBrowser();
