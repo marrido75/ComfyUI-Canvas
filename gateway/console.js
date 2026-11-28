@@ -427,7 +427,8 @@ if (failed.length === 0) {
 }
 write(`\n  ${C.dim}画布地址${C.reset} ${C.ok}http://127.0.0.1:${CANVAS_PORT}/${C.reset}\n\n`);
 
-// 不自动打开浏览器：只在 cmd 提示地址，需要时按 B 手动打开画布
+// 启动后自动打开画布（只开 3000，不碰 8188）
 if (!NO_BROWSER) {
-  write(`${C.dim}需要打开画布时，在控制台按 ${C.ok}B${C.dim}（或手动访问上面的地址）${C.reset}\n`);
+  write(`${C.dim}正在打开画布 http://127.0.0.1:${CANVAS_PORT}/ ...${C.reset}\n`);
+  openBrowser();
 }
