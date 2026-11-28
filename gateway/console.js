@@ -207,7 +207,7 @@ function printBanner() {
   write(`\n${C.title}============================================================${C.reset}\n`);
   write(`${C.title}  ComfyUI 无限画布 · 统一控制台${C.reset}  ${C.dim}${VERSION}${C.reset}\n`);
   write(`${C.title}============================================================${C.reset}\n`);
-  write(`${C.dim}  三个服务在同一个窗口运行；关闭此窗口会一并停止${C.reset}\n`);
+  write(`${C.dim}  三个服务在同一个窗口运行；按 Q 退出会一并停止服务${C.reset}\n`);
 }
 
 function printHelp() {
@@ -396,6 +396,7 @@ process.on("exit", () => {
   for (const id of IDS) stopService(id, true);
 });
 process.on("SIGINT", shutdown);
+process.on("SIGBREAK", shutdown);
 
 readline.emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) {
