@@ -41,6 +41,8 @@ const SERVICES = {
       "-s",
       path.join(COMFY_DIR, "main.py"),
       "--windows-standalone-build",
+      // 便携版参数会强制 auto_launch=true 弹出 8188 网页；这个开关优先级更高，禁用它
+      "--disable-auto-launch",
       "--port",
       "8188",
       "--listen",
