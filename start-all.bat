@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title ComfyUI 无限画布 - 一键启动
+title ComfyUI 无限画布 - 统一控制台
 cd /d "%~dp0"
 
 echo ============================================
-echo   ComfyUI 无限画布 一键启动
+echo   ComfyUI 无限画布 - 统一控制台
 echo ============================================
 echo.
 
@@ -15,41 +15,18 @@ if not exist "%~dp0node\node.exe" (
     exit /b 1
 )
 
-REM 1. 启动 ComfyUI（如果 8188 没在跑）
-echo [1/3] 检查 ComfyUI (8188)...
-curl -s -o nul -w "%%{http_code}" http://127.0.0.1:8188/system_stats > %TEMP%\comfy_check.txt 2>nul
-set /p COMFY_CODE=< %TEMP%\comfy_check.txt
-if "%COMFY_CODE%"=="200" (
-    echo       ComfyUI 已在运行，跳过
-) else (
-    echo       启动 ComfyUI（8GB 显存用 lowvram 模式，图片和视频通用）...
-    start "ComfyUI" /D "D:\ComfyUI-Easy\ComfyUI_windows_portable" cmd /c "python_embeded\python.exe -s ComfyUI\main.py --windows-standalone-build --port 8188 --listen 127.0.0.1 --lowvram"
-    echo       等待 ComfyUI 就绪（约 40 秒，加载 1600+ 节点）...
-    timeout /t 30 /nobreak >nul
+if not exist "%~dp0gateway\console.js" (
+    echo [错误] 未找到 gateway\console.js
+    pause
+    exit /b 1
 )
 
-REM 2. 启动网关（COMFY_DIR 指向 ComfyUI 根目录，用于模型检测与下载）
-echo [2/3] 启动网关 (8190)...
-if "%COMFY_DIR%"=="" set "COMFY_DIR=D:\ComfyUI-Easy\ComfyUI_windows_portable\ComfyUI"
-start "画布网关" /D "%~dp0" cmd /c ""%~dp0node\node.exe" gateway\server.js"
-timeout /t 2 /nobreak >nul
+REM 单窗口启动：ComfyUI / 网关 / 画布 全部作为后台子进程
+REM 快捷键：0/A 全部日志  1/2/3 筛选  R 重启  S 停止  B 浏览器  H 帮助  Q 退出
+"%~dp0node\node.exe" "%~dp0gateway\console.js" %*
 
-REM 3. 启动画布
-echo [3/3] 启动画布 (3000)...
-start "无限画布" /D "%~dp0" cmd /c ""%~dp0node\node.exe" gateway\serve-canvas.js"
-timeout /t 2 /nobreak >nul
-
-echo.
-echo ============================================
-echo   全部就绪！
-echo   画布地址: http://127.0.0.1:3000
-echo   网关地址: http://127.0.0.1:8190
-echo.
-echo   首次使用请在画布右上角「配置 - 渠道」里填：
-echo   Base URL: http://127.0.0.1:8190/v1
-echo   API Key : 随便填（本地不校验）
-echo   模型名  : image-qwen21（图片）/ video-minimax-h3（视频）
-echo ============================================
-echo.
-start "" http://127.0.0.1:3000
-pause
+if errorlevel 1 (
+    echo.
+    echo [错误] 控制台异常退出，请查看上方日志
+    pause
+)
