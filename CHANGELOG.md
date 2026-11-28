@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.27.12 - 2026-11-28
+
++ [修复] 图片生成进度条不显示（卡片一直转圈、网关进度停在 queued/step=0）的根因：网关在 ComfyUI 之前启动，首次 WebSocket 连接时 ComfyUI 端口还没监听；`onerror` 里调用 `close()` 时 socket 已是 CLOSED，不会触发 `onclose`，导致原「仅靠 onclose 2 秒重连」的路径失效，网关从此再也不重连、收不到任何进度消息。现改为 onerror 直接调度重连（带去重定时器），并加 5 秒心跳兜底检测连接状态，确保 ComfyUI 就绪后自动连上。已在网关日志加入「[进度] WebSocket 已连接 ComfyUI」便于确认。
+
 ## v0.27.11 - 2026-11-28
 
 + [修复] 启动时仍会弹出 ComfyUI(8188) 网页的根因：`--windows-standalone-build` 便携版参数在 ComfyUI 内部强制把 `auto_launch` 设为 `true`（cli_args.py:298-299），所以每次启动都会用浏览器打开 8188。现给 ComfyUI 启动参数追加 `--disable-auto-launch`（优先级更高，会覆盖 auto_launch=false），彻底禁止 ComfyUI 弹网页；画布 3000 的自动打开不受影响。

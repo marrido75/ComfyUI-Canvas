@@ -146,11 +146,25 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 const GATEWAY_CLIENT_ID = "local-canvas-gateway";
 const progressTasks = new Map(); // prompt_id -> { step, total, percentage, status, startedAt, updatedAt }
 let latestProgressId = null; // 最近提交的任务，供画布轮询（本地单用户场景）
+let progressWs = null; // 当前进度 WebSocket（用于心跳检测）
+let reconnectTimer = null; // 重连定时器（避免重复调度）
+
+function scheduleProgressReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectProgressSocket();
+  }, 2000);
+}
 
 function connectProgressSocket() {
   try {
     const wsUrl = COMFY.replace(/^http/, "ws") + `/ws?clientId=${GATEWAY_CLIENT_ID}`;
     const ws = new WebSocket(wsUrl);
+    progressWs = ws;
+    ws.onopen = () => {
+      console.log("  [进度] WebSocket 已连接 ComfyUI");
+    };
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
@@ -190,13 +204,21 @@ function connectProgressSocket() {
         if (t) { t.status = "done"; t.percentage = 100; t.updatedAt = Date.now(); }
       }
     };
-    ws.onclose = () => { setTimeout(connectProgressSocket, 2000); }; // 断线重连
-    ws.onerror = () => { try { ws.close(); } catch {} };
+    // 断线/连接失败都要重连。关键：Connection refused 时 onerror 触发后 socket
+    // 往往已经是 CLOSED，仅靠 close() 不会触发 onclose，必须在这里直接调度重连，
+    // 否则「网关先于 ComfyUI 启动」时永远不再重连，进度一直停在 queued/step=0。
+    ws.onclose = () => { if (progressWs === ws) progressWs = null; scheduleProgressReconnect(); };
+    ws.onerror = () => { try { ws.close(); } catch {} scheduleProgressReconnect(); };
   } catch (e) {
-    setTimeout(connectProgressSocket, 2000);
+    scheduleProgressReconnect();
   }
 }
 connectProgressSocket();
+
+// 心跳兜底：每 5 秒检查一次，若连接不存在或非 OPEN 则重连（覆盖各种异常关闭路径）
+setInterval(() => {
+  if (!progressWs || progressWs.readyState !== 1 /* OPEN */) scheduleProgressReconnect();
+}, 5000);
 
 /** 供画布轮询：返回当前（最近提交的）生成任务进度 */
 function handleProgress(res) {
