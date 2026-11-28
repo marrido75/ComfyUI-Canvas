@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v0.27.6 - 2026-11-28
+
++ [修复] 网关已生成图片但画布卡片永久停在「生成中」转圈：同一节点被重复触发（连点 / Enter+按钮双触发）时，新请求会 abort 旧请求，而 abort 的请求既不走成功也不走失败分支，节点状态卡在 loading。现 handleGenerateNode 开头对 runningNodeId 相同的节点直接忽略重复触发；并在 startGenerationRequest abort 旧请求时兜底把遗留 loading 节点恢复为 idle。
+
 ## v0.27.5 - 2026-11-22
 
 + [修复] 图片生成进度条不显示（只剩「生成中」转圈）：ComfyUI v0.46 把进度消息从 `progress`（data.value/max）改为 `progress_state`（data.nodes[节点].value/max），网关 WebSocket 监听未兼容导致进度全部丢失。现同时兼容两代格式，优先取仍在运行的采样节点，并识别新版 `execution_success` 完成消息。实测进度 4%→100% 平滑推进、25 步采样正确显示。

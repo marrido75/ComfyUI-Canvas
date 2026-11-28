@@ -314,7 +314,18 @@ function InfiniteCanvasPage() {
     const startGenerationRequest = useCallback((targetNodeId: string, originNodeId: string, runningId = originNodeId, controller = new AbortController()) => {
         const previous = generationRequestsRef.current.get(targetNodeId);
         if (previous?.progressTimer) clearInterval(previous.progressTimer);
-        if (previous?.controller !== controller) previous?.controller.abort();
+        if (previous?.controller !== controller) {
+            previous?.controller.abort();
+            // 兜底：被 abort 的旧请求不会走到成功/失败分支，主动清掉遗留的 loading，
+            // 避免网关已完成但卡片永久停在「生成中」转圈（重复触发时会发生）
+            if (previous) {
+                setNodes((prev) => prev.map((item) =>
+                    item.id === previous.targetNodeId && item.metadata?.status === NODE_STATUS_LOADING
+                        ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } }
+                        : item,
+                ));
+            }
+        }
         const startTime = Date.now();
         const request: CanvasGenerationRequest = { targetNodeId, originNodeId, runningNodeId: runningId, controller, startTime };
         generationRequestsRef.current.set(targetNodeId, request);
@@ -2489,6 +2500,9 @@ function InfiniteCanvasPage() {
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
+            // 防重复：同一节点已在生成中时忽略再次触发（连点 / Enter+按钮双触发），
+            // 否则新请求会 abort 旧请求，导致网关虽完成但卡片永久停在「生成中」
+            if (Array.from(generationRequestsRef.current.values()).some((r) => r.runningNodeId === nodeId)) return;
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
